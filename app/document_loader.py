@@ -9,31 +9,19 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 import pymupdf
 
+from app.models import DocumentChunk
+
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".xlsx"}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DOCUMENTS_DIR = PROJECT_ROOT / "documents"
-
-
-@dataclass(frozen=True)
-class DocumentChunk:
-    """A unit of extracted text plus the location it came from."""
-
-    text: str
-    filename: str
-    source_type: str
-    page_number: int | None = None
-    sheet_name: str | None = None
-    row_number: int | None = None
-    excel_values: dict[str, object] | None = None
 
 
 def default_documents_dir() -> Path:

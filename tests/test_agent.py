@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from google.genai import types
 
-from app.document_loader import DocumentChunk
+from app.models import DocumentChunk
 from app.agent import (
     ANALYZE_EXCEL_DECLARATION,
     MODEL_NAME,

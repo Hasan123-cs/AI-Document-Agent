@@ -1,59 +1,183 @@
 # AI Document Assistant
 
-Streamlit app for asking grounded questions about local PDF and Excel
-documents. Gemini receives document questions and can request local tools:
-`search_documents` for ranked passages and `analyze_excel` for complete
-spreadsheet column discovery, numeric filtering, min/max, sums, and counts.
-Python runs each requested tool and returns its results to Gemini; document
-files are not uploaded to the model.
+An AI-powered document analysis application built with **Python, Streamlit, and Google Gemini**. The application reads PDF and Excel files from a local folder and answers natural-language questions about their contents using LLM function calling and dedicated document analysis tools.
 
-## Setup
+Developed as a technical assessment for the **Junior Software & IT Support** role.
 
-Requirements: Python 3.10 or newer.
+## Features
 
-```powershell
+- **PDF and Excel Processing:** Reads supported documents from a local folder and extracts their content.
+- **Natural-Language Question Answering:** Users can ask questions through a simple Streamlit web interface.
+- **AI Function Calling:** Google Gemini selects appropriate tools to search documents or analyze Excel data.
+- **Excel Data Analysis:** Supports filtering and numerical comparisons on structured spreadsheet data.
+- **Source References:** Displays references to the documents used to answer questions.
+- **Error Handling:** Handles empty folders, unreadable files, and common API errors.
+- **Local Search Fallback:** Returns relevant document search results when Gemini is temporarily unavailable.
+- **Document Caching:** Reduces repeated PDF and Excel processing.
+
+## Technology Stack
+
+| Technology | Purpose |
+|---|---|
+| Python | Backend logic and document processing |
+| Streamlit | Web user interface |
+| Google Gemini API | Natural-language processing and function calling |
+| PDF and Excel parsing libraries | Reading and extracting document content |
+| Pytest | Automated testing |
+| Cursor | AI-assisted development |
+
+## Project Structure
+
+```text
+AI-Document-Agent/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── agent.py
+│   ├── tools.py
+│   ├── document_loader.py
+│   └── models.py
+├── documents/
+├── tests/
+├── requirements.txt
+├── README.md
+└── DEVELOPMENT_NOTE.md
+```
+
+### Main Components
+
+- **`app/main.py`** — Streamlit interface, document status, question submission, answer display, and caching.
+- **`app/agent.py`** — Gemini integration, function calling, tool orchestration, and fallback handling.
+- **`app/tools.py`** — Local document searching and structured Excel analysis.
+- **`app/document_loader.py`** — PDF and Excel extraction, chunk creation, and source metadata.
+- **`app/models.py`** — Shared data models, including `DocumentChunk` and `AgentAnswer`.
+- **`tests/`** — Automated tests for application functionality.
+
+## Installation and Setup
+
+### Prerequisites
+
+- Python 3.10 or newer (verify compatibility with the installed dependencies)
+- A Google Gemini API key
+- Git (for cloning the repository)
+
+### 1. Clone the Repository
+
+```bash
+git clone <YOUR_GITHUB_REPOSITORY_URL>
+cd AI-Document-Agent
+```
+
+### 2. Create a Virtual Environment
+
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
 ```
 
-Set `GEMINI_API_KEY` in `.env`. `GEMINI_MODEL` is optional and defaults to
-`gemini-3-flash-preview`. If the selected model is missing, rate-limited,
-unavailable, times out, or cannot be reached, the agent tries at most one
-fallback model per request. Only `generateContent` models selected for Gemini
-function calling are candidates. Model-list availability does not guarantee
-that a model has quota or is currently serving requests.
-
-Place `.pdf` and `.xlsx` files in `documents/`, then start the app:
+Activate it on Windows:
 
 ```powershell
-streamlit run app/main.py
+.venv\Scripts\Activate.ps1
 ```
 
-Use **Reload documents** after changing files. Corrupt files are logged and
-skipped while valid files continue loading. An empty folder is reported in the
-UI. Excel analyses operate over typed cell values from the whole workbook and
-include filename, sheet, and row references. If Gemini is unavailable, the UI
-shows clearly labeled local keyword matches; these are not AI answers and do
-not perform spreadsheet calculations.
+On macOS or Linux:
 
-## Model diagnostics
-
-The diagnostic script lists models the configured key can enumerate and makes
-a small real function-calling request to the configured model and its fallback.
-It prints model names and status only, never the API key or response content.
-Availability and quota can change over time.
-
-```powershell
-python -m app.test
+```bash
+source .venv/bin/activate
 ```
 
-## Tests
+### 3. Install Dependencies
 
-```powershell
-python -m pytest -q
+```bash
+pip install -r requirements.txt
 ```
 
-Tests use local fixtures and mocked Gemini responses; they do not require live
-API access.
+### 4. Configure the API Key
+
+Create a `.env` file in the project root:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key
+```
+
+Never commit your actual API key to GitHub.
+
+### 5. Add Documents
+
+Place your PDF and Excel files inside the `documents/` directory.
+
+Example:
+
+```text
+documents/
+├── contract.pdf
+├── project_scope.pdf
+└── boq.xlsx
+```
+
+### 6. Run the Application
+
+From the project root, execute:
+
+```bash
+python -m streamlit run app/main.py
+```
+
+Streamlit will display a local URL where you can access the application.
+
+## How It Works
+
+1. The application reads PDF and Excel files from the documents folder.
+2. Extracted content is converted into searchable document chunks with source metadata.
+3. The user submits a natural-language question through the Streamlit interface.
+4. The Gemini agent uses function calling to select an appropriate document analysis tool.
+5. The selected tool searches document content or performs structured Excel analysis.
+6. The agent returns an answer with available source references.
+7. If Gemini is unavailable, the application can return local search results as a fallback.
+
+## Example Questions
+
+The following questions illustrate the intended capabilities. Results depend on the documents provided.
+
+**PDF Questions**
+- Summarize the scope of work described in the contract.
+- What are the main project requirements?
+- What deliverables are mentioned in the documents?
+
+**Excel Questions**
+- List all cost items above SAR 1 million.
+- Which items have the highest costs?
+- What is the total cost of the listed items?
+
+## Testing
+
+Run the automated tests from the project root:
+
+```bash
+python -m pytest tests
+```
+
+The test suite is intended to validate document processing, tool behavior, and error handling.
+
+## Error Handling and Limitations
+
+The application includes handling for common failures, including unreadable documents, empty folders, and temporary AI service issues.
+
+Current limitations include:
+
+- Scanned PDFs without extractable text may require OCR.
+- Complex PDF tables may not be extracted perfectly.
+- Accuracy depends on the quality and structure of the provided documents.
+- Very large document collections may require additional processing optimizations.
+- AI-generated answers depend on the availability of the configured Gemini API.
+
+
+## AI-Assisted Development
+
+This project was developed with assistance from **Cursor**, which was used for implementation, debugging, and code refactoring.
+
+For development time, key design decisions, and potential improvements, see [`DEVELOPMENT_NOTE.md`](DEVELOPMENT_NOTE.md).
+
+## Project Purpose
+
+This application demonstrates AI-assisted software development, LLM tool calling, document processing, structured data analysis, and a practical user interface for interacting with project documents.

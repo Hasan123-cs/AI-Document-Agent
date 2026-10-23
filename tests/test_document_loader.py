@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.document_loader import DocumentChunk, load_documents, load_pdf, load_xlsx
+from app.document_loader import load_documents, load_pdf, load_xlsx
+from app.models import DocumentChunk
 
 
 def test_empty_folder_returns_no_chunks(empty_documents_dir: Path) -> None:

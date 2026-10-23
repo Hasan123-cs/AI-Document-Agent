@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.document_loader import DocumentChunk
+from app.models import DocumentChunk
 from app.tools import analyze_excel, search_documents
 
 

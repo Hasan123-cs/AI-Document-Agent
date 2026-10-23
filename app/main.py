@@ -17,7 +17,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.agent import AgentAnswer, ask_question
+from app.agent import ask_question
+from app.models import AgentAnswer
 from app.document_loader import default_documents_dir, load_documents
 
 logging.basicConfig(level=logging.INFO)

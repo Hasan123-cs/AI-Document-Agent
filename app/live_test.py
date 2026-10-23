@@ -1,4 +1,4 @@
-from app.document_loader import DocumentChunk
+from app.models import DocumentChunk
 from app.agent import ask_question
 
 # Create a sample PDF chunk

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.document_loader import DocumentChunk
+from app.models import DocumentChunk
 
 logger = logging.getLogger(__name__)
 

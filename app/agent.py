@@ -12,13 +12,12 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from app.document_loader import DocumentChunk
+from app.models import AgentAnswer, DocumentChunk
 from app.tools import (
     MAX_EXCEL_PAGE_SIZE,
     SearchResult,
@@ -150,24 +149,6 @@ ANALYZE_EXCEL_DECLARATION = types.FunctionDeclaration(
         required=["operation"],
     ),
 )
-
-
-@dataclass
-class AgentAnswer:
-    """Final answer with citations from executed document tools."""
-
-    text: str
-    sources: list[SearchResult] = field(default_factory=list)
-    error: str | None = None
-    elapsed_seconds: float | None = None
-    reference_labels: list[str] = field(default_factory=list)
-    is_fallback: bool = False
-    model: str | None = None
-
-    def source_labels(self) -> list[str]:
-        """Human-readable citations for UI display."""
-        labels = [format_source(source) for source in self.sources]
-        return list(dict.fromkeys(labels + self.reference_labels))
 
 
 class DocumentAgent:
