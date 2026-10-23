@@ -27,7 +27,7 @@ from app.tools import (
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "gemini-3-flash-preview"
+MODEL_NAME = "gemini-3.1-flash-lite"
 FALLBACK_MODEL_NAMES = ("gemini-3.8-flash",)
 MAX_MODEL_ATTEMPTS = 2
 MAX_TOOL_ROUNDS = 3
@@ -36,7 +36,7 @@ MAX_RESULTS_TO_MODEL = 5
 MAX_PASSAGE_CHARS = 800
 MAX_QUESTION_CHARS = 4000
 THINKING_LEVEL = types.ThinkingLevel.LOW
-REQUEST_TIMEOUT_MS = 10_000
+REQUEST_TIMEOUT_MS = 30_000
 RETRY_ATTEMPTS = 1
 
 _cached_client: object | None = None
