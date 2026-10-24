@@ -935,6 +935,19 @@ def _response_function_calls(response: object) -> list:
         # := mean assign call to getattr then check its python syntax
         if (call := getattr(part, "function_call", None)) is not None
     ]
+# parts in gemini like : 
+# parts = [
+#     Part(text="I will analyze the Excel file."),
+#     Part(
+#         function_call=FunctionCall(
+#             name="analyze_excel",
+#             args={
+#                 "operation": "max",
+#                 "column": "Amount SAR"
+#             }
+#         )
+#     )
+# ]
 # this the response at end : 
 # calls = [
 #     FunctionCall(
@@ -977,7 +990,7 @@ def _safe_tool_error(error: str, limit: int = 300) -> str:
     )
     return _truncate(safe_error, limit)
 
-
+# get result has the same tool name and operation (argument )
 def _tool_call_cache_key(call: object) -> str:
     return json.dumps(
         [_call_name(call), _call_args(call)],
@@ -1053,7 +1066,10 @@ def _deterministic_excel_answer(results: list[dict]) -> AgentAnswer | None:
 
     return None
 
-
+# results = [
+#     {"operation": "count", "value": 1000},
+#     {"error": "Column required", "numeric_columns": ["Amount SAR", "Quantity"]}
+# ]
 def _clarification_from_results(results: list[dict]) -> str | None:
     for result in reversed(results):
         if result.get("numeric_columns"):
@@ -1064,13 +1080,14 @@ def _clarification_from_results(results: list[dict]) -> str | None:
             )
     return None
 
-
+# type .part is a chunck of gemini masseg 
 def _function_response_part(call: object, payload: dict) -> types.Part:
     """Send tool output back, including the call id when Gemini provided one."""
     return types.Part(
         function_response=types.FunctionResponse(
             name=_call_name(call) or "search_documents",
             response=payload,
+            # if have many fct calling to know each one 
             id=getattr(call, "id", None),
         )
     )
@@ -1126,7 +1143,11 @@ def _unique_sources(sources: list[SearchResult]) -> list[SearchResult]:
         unique.append(source)
     return unique
 
-
+# query1 = "Python Developer"
+# query2 = "python developer"
+# query3 = "  PYTHON   Developer  "
+# this 3 is the same 
+# create key from tool and argument name for cashing 
 def _query_cache_key(query: object) -> str:
     """Normalize a search query so repeated Gemini calls can reuse local results."""
     if not isinstance(query, str):
