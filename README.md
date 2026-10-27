@@ -8,8 +8,9 @@ Developed as a technical assessment for the **Junior Software & IT Support** rol
 
 - **PDF and Excel Processing:** Reads supported documents from a local folder and extracts their content.
 - **Natural-Language Question Answering:** Users can ask questions through a simple Streamlit web interface.
+- **Responsive Analysis Dashboard:** A professional, mobile-aware workspace for document status, chat, source citations, and structured spreadsheet results.
 - **AI Function Calling:** Google Gemini selects appropriate tools to search documents or analyze Excel data.
-- **Excel Data Analysis:** Supports filtering and numerical comparisons on structured spreadsheet data.
+- **Excel Data Analysis:** Supports filtering, threshold comparisons, sums, averages, counts, and extrema on structured spreadsheet data.
 - **Source References:** Displays references to the documents used to answer questions.
 - **Error Handling:** Handles empty folders, unreadable files, and common API errors.
 - **Local Search Fallback:** Returns relevant document search results when Gemini is temporarily unavailable.
@@ -148,6 +149,7 @@ The following questions illustrate the intended capabilities. Results depend on 
 - List all cost items above SAR 1 million.
 - Which items have the highest costs?
 - What is the total cost of the listed items?
+- What is the average cost?
 
 ## Testing
 
@@ -181,3 +183,10 @@ For development time, key design decisions, and potential improvements, see [`DE
 ## Project Purpose
 
 This application demonstrates AI-assisted software development, LLM tool calling, document processing, structured data analysis, and a practical user interface for interacting with project documents.
+
+
+
+
+
+
+

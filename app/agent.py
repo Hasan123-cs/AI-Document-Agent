@@ -48,8 +48,8 @@ Rules:
 - Use an appropriate document tool before answering factual questions:
   search_documents for text and analyze_excel for spreadsheet analysis.
 - Use analyze_excel for spreadsheet column discovery, numeric filters, extrema,
-  sums, and counts. Never calculate an aggregate from a partial search result.
-- For questions asking for the maximum, minimum, total, or count from a
+  sums, averages, and counts. Never calculate an aggregate from a partial search result.
+- For questions asking for the maximum, minimum, total, average, mean, or count from a
   spreadsheet, call analyze_excel with the matching operation; do not use
   search_documents for numerical aggregation.
 - If the user names a metric such as progress but not its exact header, pass that
@@ -102,8 +102,8 @@ ANALYZE_EXCEL_DECLARATION = types.FunctionDeclaration(
     description=(
         "Analyze all loaded Excel rows using typed cell values. Use list_columns "
         "first when the relevant sheet or numeric column is unclear. Supports "
-        "filtering numeric values by threshold, max, min, sum, and count. "
-        "For max, min, sum, count, and filter, provide the column argument. "
+        "filtering numeric values by threshold, max, min, sum, average, and count. "
+        "For max, min, sum, average, count, and filter, provide the column argument. "
         "Omit column only for list_columns. If the question clearly identifies "
         "a metric but column is omitted, the application can resolve it from "
         "the original question only when exactly one numeric column matches. "
@@ -116,12 +116,20 @@ ANALYZE_EXCEL_DECLARATION = types.FunctionDeclaration(
         properties={
             "operation": types.Schema(
                 type=types.Type.STRING,
-                enum=["list_columns", "filter", "max", "min", "sum", "count"],
+                enum=[
+                    "list_columns",
+                    "filter",
+                    "max",
+                    "min",
+                    "sum",
+                    "average",
+                    "count",
+                ],
             ),
             "column": types.Schema(
                 type=types.Type.STRING,
                 description=(
-                    "Required for max, min, sum, count, and filter; omit only "
+                    "Required for max, min, sum, average, count, and filter; omit only "
                     "for list_columns. Use the numeric header or a clear "
                     "variation such as cost, amount, progress, or quantity."
                 ),
@@ -219,7 +227,9 @@ class DocumentAgent:
         attempted_models: set[str] = set()
 
         tool_history: set[str] = set()
+        # assign via gemini agent 
         structured_results: list[dict] = []
+
         final_only_next = False
 
         for round_index in range(MAX_TOOL_ROUNDS + 1):
@@ -342,6 +352,7 @@ class DocumentAgent:
                         reference_labels=list(dict.fromkeys(reference_labels)),
                         error=error,
                         model=selected_model,
+                        excel_results=list(structured_results),
                     ),
                     started,
                 )
@@ -1006,7 +1017,7 @@ def _deterministic_excel_answer(results: list[dict]) -> AgentAnswer | None:
         operation = result.get("operation")
         if result.get("error"):
             continue
-        if operation in {"max", "min", "sum", "count"} and "value" in result:
+        if operation in {"max", "min", "sum", "count", "average"} and "value" in result:
             rows = result.get("rows") or []
             column = str(
                 (rows[0].get("column") if rows else None)
@@ -1019,6 +1030,7 @@ def _deterministic_excel_answer(results: list[dict]) -> AgentAnswer | None:
                 "min": "Minimum",
                 "sum": "Total",
                 "count": "Count",
+                "average": "Average",
             }[operation]
             text = f"{action} for {column}: {value}."
             if rows:
@@ -1039,6 +1051,18 @@ def _deterministic_excel_answer(results: list[dict]) -> AgentAnswer | None:
             return AgentAnswer(
                 text=text,
                 reference_labels=list(references),
+                excel_results=list(results),
+            )
+
+        if operation == "average" and result.get("row_count") == 0:
+            return AgentAnswer(
+                text=(
+                    "No numeric values matched the selected column and criteria, "
+                    f"so an average for {result.get('column', 'the selected column')} "
+                    "could not be calculated."
+                ),
+                reference_labels=list(result.get("source_references") or []),
+                excel_results=list(results),
             )
 
         if operation == "filter":
@@ -1049,6 +1073,7 @@ def _deterministic_excel_answer(results: list[dict]) -> AgentAnswer | None:
                         f"No rows matched the filter for {result.get('column', 'the selected column')}."
                     ),
                     reference_labels=list(result.get("source_references") or []),
+                    excel_results=list(results),
                 )
             references = result.get("source_references") or []
             shown = ", ".join(
@@ -1062,7 +1087,11 @@ def _deterministic_excel_answer(results: list[dict]) -> AgentAnswer | None:
             )
             if references:
                 text += " Sources: " + "; ".join(references) + "."
-            return AgentAnswer(text=text, reference_labels=list(references))
+            return AgentAnswer(
+                text=text,
+                reference_labels=list(references),
+                excel_results=list(results),
+            )
 
     return None
 
@@ -1080,7 +1109,7 @@ def _clarification_from_results(results: list[dict]) -> str | None:
             )
     return None
 
-# type .part is a chunck of gemini masseg 
+# type.part is a chunck of gemini masseg 
 def _function_response_part(call: object, payload: dict) -> types.Part:
     """Send tool output back, including the call id when Gemini provided one."""
     return types.Part(
@@ -1124,7 +1153,7 @@ def _match_dict(result: SearchResult) -> dict:
         "row_number": result.row_number,
     }
 
-
+# get unique source dont duplicate 
 def _unique_sources(sources: list[SearchResult]) -> list[SearchResult]:
     """Preserve first-seen source locations across multiple tool calls."""
     unique: list[SearchResult] = []

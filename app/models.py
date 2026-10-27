@@ -30,9 +30,11 @@ class AgentAnswer:
     sources: list[SearchResult] = field(default_factory=list)
     error: str | None = None
     elapsed_seconds: float | None = None
+    # each object has new list 
     reference_labels: list[str] = field(default_factory=list)
     is_fallback: bool = False
     model: str | None = None
+    excel_results: list[dict[str, object]] = field(default_factory=list)
 
     def source_labels(self) -> list[str]:
         """Human-readable citations for UI display."""

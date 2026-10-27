@@ -32,7 +32,7 @@ project/
 5. `DocumentAgent.ask()` validates question/chunks, obtains Gemini client, and sends user question with system instruction and function declarations.
 6. Gemini may return text or one/more function calls. `_response_function_calls()` extracts calls; `_run_tool_call()` safely invokes `_execute_tool()`, which dispatches local Python search/Excel operations and caches results.
 7. Tool results are returned to Gemini as `types.FunctionResponse` parts. Loop is bounded by tool-round and call budgets; repeated calls are tracked.
-8. Agent returns `AgentAnswer(text, sources, reference_labels, error, elapsed_seconds, is_fallback, model)`. Streamlit displays answer, model, response time, and deduplicated citations.
+8. Agent returns `AgentAnswer(text, sources, reference_labels, error, elapsed_seconds, is_fallback, model, excel_results)`. Streamlit displays the conversation, structured Excel tables/calculations, model, response time, and deduplicated citations.
 9. On missing/unavailable Gemini API, local keyword fallback is clearly labeled; after completed Excel operations, deterministic Excel answer can be synthesized without Gemini. Ambiguous numeric column can trigger a clarification.
 
 ## Data contracts
@@ -41,7 +41,7 @@ project/
 
 **`SearchResult`** (`@dataclass(frozen=True)` in `tools.py`): `text`, `filename`, `source_type`, optional `page_number`, `sheet_name`, `row_number`, `score: int`.
 
-**`AgentAnswer`** (`@dataclass`): `text`, `sources: list[SearchResult]`, `error`, `elapsed_seconds`, `reference_labels: list[str]`, `is_fallback: bool`, `model`. `source_labels()` combines `format_source(source)` for sources with `reference_labels`, preserving order and removing duplicates.
+**`AgentAnswer`** (`@dataclass`): `text`, `sources: list[SearchResult]`, `error`, `elapsed_seconds`, `reference_labels: list[str]`, `is_fallback: bool`, `model`, `excel_results: list[dict[str, object]]`. `source_labels()` combines `format_source(source)` for sources with `reference_labels`, preserving order and removing duplicates.
 
 ## Gemini configuration and safety boundaries (`app/agent.py`)
 
@@ -49,7 +49,7 @@ project/
 - `MAX_MODEL_ATTEMPTS = 2`, `MAX_TOOL_ROUNDS = 3`, `MAX_TOOL_CALLS = 8`, `MAX_RESULTS_TO_MODEL = 5`, `MAX_PASSAGE_CHARS = 800`, `MAX_QUESTION_CHARS = 4000`.
 - `THINKING_LEVEL = LOW`, `REQUEST_TIMEOUT_MS = 30000`, `RETRY_ATTEMPTS = 1` (SDK retry configuration; do not assume this guarantees a retry).
 - Tool definitions are `SEARCH_DOCUMENTS_DECLARATION` and `ANALYZE_EXCEL_DECLARATION`. `automatic_function_calling` is disabled, so Python explicitly executes returned function calls. Function-calling mode `AUTO` lets Gemini decide between tool call and text.
-- `SYSTEM_INSTRUCTION` requires evidence-based answers, source citations, no fabricated numbers, numeric aggregation through `analyze_excel` rather than search hits, clarification when ambiguous, and pagination awareness.
+- `SYSTEM_INSTRUCTION` requires evidence-based answers, source citations, no fabricated numbers, numeric aggregation (including average/mean) through `analyze_excel` rather than search hits, clarification when ambiguous, and pagination awareness.
 - `.env` supplies `GEMINI_API_KEY`; `_safe_log_arguments()` and `_safe_tool_error()` redact potentially sensitive log details. Never paste actual secrets into this file or commits.
 - The tool cache is reset at the start of each `DocumentAgent.ask()` invocation. Streamlit's `@st.cache_data` for document parsing is a **different cache**.
 
@@ -57,7 +57,7 @@ project/
 
 **`search_documents(chunks, query, max_results=5)`**: deterministic local keyword ranking (no embeddings or vector database). Normalizes to lowercase alphanumeric tokens; `_score_chunk` gives +100 for each distinct matched query token, +20 for full phrase match, and a term-frequency tie breaker. Supports one-edit typo matching for sufficiently long tokens. Returns top ranked `SearchResult`s with source metadata.
 
-**`analyze_excel(chunks, operation, column=None, threshold=None, comparison="greater_than", offset=0, limit=50, question_context=None)`**: works only on XLSX chunks. Operations: `list_columns`, `filter`, `max`, `min`, `sum`, `count`. Uses `_resolve_column` to map user column names to sheet headers, including normalized direct matches, aliases and limited typo matching; refuses ambiguous matches. Uses `_parse_number` returning `Decimal` or `None` to ignore nonnumeric cells and handle currencies, separators, negatives and k/m/b suffixes. Filters numeric records by optional threshold/comparison. `filter` returns `row_count` (total matches), current `rows`, `offset`, and `next_offset`; each page capped at 50. `max/min` returns extremum and matching rows (up to 50); `sum/count` aggregates all matching numeric records, not just a page. Outputs include source references for Excel rows.
+**`analyze_excel(chunks, operation, column=None, threshold=None, comparison="greater_than", offset=0, limit=50, question_context=None)`**: works only on XLSX chunks. Operations: `list_columns`, `filter`, `max`, `min`, `sum`, `average`, `count`. Uses `_resolve_column` to map user column names to sheet headers, including normalized direct matches, aliases and limited typo matching; refuses ambiguous matches. Uses `_parse_number` returning `Decimal` or `None` to ignore nonnumeric cells and handle currencies, separators, negatives and k/m/b suffixes. Filters numeric records by optional threshold/comparison. `filter` returns `row_count` (total matches), current `rows`, `offset`, and `next_offset`; each page capped at 50. `max/min` returns extremum and matching rows (up to 50); `sum/count/average` aggregate all matching numeric records, not just a page. Average divides the Decimal sum by the count of valid numeric records. Outputs include source references for Excel rows.
 
 **Important:** `count` counts valid numeric matching records in the chosen column, not all rows in a sheet. `_resolve_column()` returns `None` on ambiguity rather than guessing. Excel `row_number` is the original 1-based worksheet row, not a pandas index. `_find_header_row()` is a heuristic, not guaranteed perfect.
 
@@ -65,7 +65,7 @@ project/
 
 - `DocumentAgent.ask()` handles blank question, no chunks, missing API key, client initialization failures, API failures, empty model output, unknown tools, tool errors, repeated calls, and tool limits.
 - `_generate_content()` tries eligible models (up to 2 per invocation), classifies provider errors, and only tries alternate models for fallback-eligible error categories. `_classify_api_error()` distinguishes rate limits, not found, unavailable, timeout, authentication, invalid request, network and unknown.
-- `_deterministic_excel_answer(structured_results)` uses **previously executed Excel results in the current question** for `max/min/sum/count/filter`; it is not a general AI substitute and does not calculate from incomplete search snippets.
+- `_deterministic_excel_answer(structured_results)` uses **previously executed Excel results in the current question** for `max/min/sum/average/count/filter`; it is not a general calculator and does not calculate from incomplete search snippets.
 - `_clarification_from_results()` asks the user to select a numeric column when tool results contain `numeric_columns`.
 - `_local_fallback()` performs keyword search over loaded chunks, labels it as **local matches, not an AI-generated answer**, and explicitly says it does not perform spreadsheet calculations.
 - The UI uses `should_skip_duplicate_request` and `st.session_state.in_flight` to reduce duplicate submissions; `_folder_signature` and `@st.cache_data` control parsing cache invalidation.
@@ -81,14 +81,16 @@ The following index includes **all defined functions and methods in the supplied
 ### `app/main.py`
 
 - **`should_skip_duplicate_request(clicked, in_flight)`** — Prevent repeat submission during an in-flight request.
-- **`main()`** — Configure and render Streamlit page.
+- **`main()`** — Configure and render the responsive Streamlit dashboard.
 - **`_ensure_documents_loaded()`** — Initialize session state and load chunks once.
 - **`_folder_signature(folder)`** — Fingerprint local files by filename, modification time and size.
 - **`_load_documents_cached(folder, signature)`** — Streamlit-cached parsing of local documents.
-- **`_reload_documents()`** — Reload local chunks and reset prior answer.
-- **`_show_document_status(chunks)`** — Show counts, folder, filenames and reload button.
+- **`_reload_documents()`** — Reload local chunks and reset the conversation.
+- **`_show_sidebar(chunks)`** — Show branding, file counts/list, controls, and API configuration status.
+- **`_show_summary_cards(chunks)`** — Show document, PDF, Excel, and chunk counts.
 - **`_show_question_form(chunks)`** — Validate question and call ask_question, with in-flight guard.
-- **`_show_answer()`** — Render AgentAnswer, fallback/error status, model, time and sources.
+- **`_show_conversation()`** — Render chat history, structured Excel results, and citations.
+- **`_render_excel_results(answer, chunks, turn_index)`** — Render Excel tables and aggregates, with filter pagination.
 
 ### `app/document_loader.py`
 

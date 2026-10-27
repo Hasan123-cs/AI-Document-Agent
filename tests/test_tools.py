@@ -223,6 +223,150 @@ def test_excel_analysis_sums_numeric_formats_and_references_all_rows() -> None:
     ]
 
 
+def test_excel_average_of_numeric_values_and_source_references() -> None:
+    chunks = [
+        _xlsx("Cost: 100", "BOQ", 2, excel_values={"Cost": 100}),
+        _xlsx("Cost: 200", "BOQ", 3, excel_values={"Cost": 200}),
+        _xlsx("Cost: 300", "BOQ", 4, excel_values={"Cost": 300}),
+    ]
+
+    result = analyze_excel(chunks, operation="average", column="cost")
+
+    assert result["operation"] == "average"
+    assert result["column"] == "Cost"
+    assert result["value"] == 200
+    assert result["row_count"] == 3
+    assert result["source_references"] == [
+        "inventory.xlsx, sheet BOQ, rows 2-4"
+    ]
+
+
+def test_excel_average_preserves_decimal_precision() -> None:
+    chunks = [
+        _xlsx("Amount: 0.1", "BOQ", 2, excel_values={"Amount": "0.1"}),
+        _xlsx("Amount: 0.2", "BOQ", 3, excel_values={"Amount": "0.2"}),
+        _xlsx("Amount: 0.3", "BOQ", 4, excel_values={"Amount": "0.3"}),
+    ]
+
+    result = analyze_excel(chunks, operation="average", column="amount")
+
+    assert result["value"] == "0.2"
+    assert result["row_count"] == 3
+
+
+def test_excel_average_ignores_empty_and_nonnumeric_cells() -> None:
+    chunks = [
+        _xlsx("Amount: 100", "BOQ", 2, excel_values={"Amount": 100}),
+        _xlsx("Amount: blank", "BOQ", 3, excel_values={"Amount": None}),
+        _xlsx("Amount: n/a", "BOQ", 4, excel_values={"Amount": "n/a"}),
+        _xlsx("Amount: 300", "BOQ", 5, excel_values={"Amount": 300}),
+    ]
+
+    result = analyze_excel(chunks, operation="average", column="amount")
+
+    assert result["value"] == 200
+    assert result["row_count"] == 2
+    assert result["source_references"] == [
+        "inventory.xlsx, sheet BOQ, rows 2, 5"
+    ]
+
+
+def test_excel_average_with_no_numeric_matches_is_safe() -> None:
+    chunks = [
+        _xlsx("Amount: n/a", "BOQ", 2, excel_values={"Amount": "n/a"}),
+        _xlsx("Amount: blank", "BOQ", 3, excel_values={"Amount": None}),
+    ]
+
+    result = analyze_excel(chunks, operation="average", column="amount")
+
+    assert result["operation"] == "average"
+    assert result["column"] == "amount"
+    assert result["row_count"] == 0
+    assert "No numeric values" in result["message"]
+    assert "value" not in result
+
+
+def test_excel_average_applies_threshold_to_all_records_not_page() -> None:
+    chunks = [
+        _xlsx(
+            f"Item: {row} | Cost: {cost}",
+            "BOQ",
+            row,
+            excel_values={"Item": row, "Cost": cost},
+        )
+        for row, cost in ((2, 100), (3, 200), (4, 300), (5, 400))
+    ]
+
+    result = analyze_excel(
+        chunks,
+        operation="average",
+        column="cost",
+        threshold=150,
+        comparison="greater_than",
+        offset=3,
+        limit=1,
+    )
+
+    assert result["value"] == 300
+    assert result["row_count"] == 3
+    assert result["source_references"] == [
+        "inventory.xlsx, sheet BOQ, rows 3-5"
+    ]
+
+
+def test_excel_average_does_not_guess_ambiguous_column() -> None:
+    chunks = [
+        _xlsx(
+            "Total Cost: 100 | Unit Cost: 25",
+            "BOQ",
+            2,
+            excel_values={"Total Cost": 100, "Unit Cost": 25},
+        )
+    ]
+
+    result = analyze_excel(
+        chunks,
+        operation="average",
+        question_context="What is the average cost?",
+    )
+
+    assert "error" in result
+    assert result["numeric_columns"] == ["Total Cost", "Unit Cost"]
+
+
+def test_excel_average_reports_ambiguous_column_alias() -> None:
+    chunks = [
+        _xlsx(
+            "Total Cost: 100 | Unit Cost: 25",
+            "BOQ",
+            2,
+            excel_values={"Total Cost": 100, "Unit Cost": 25},
+        )
+    ]
+
+    result = analyze_excel(chunks, operation="average", column="cost")
+
+    assert "error" in result
+    assert result["numeric_columns"] == ["Total Cost", "Unit Cost"]
+
+
+def test_excel_average_includes_rows_from_multiple_sheets() -> None:
+    chunks = [
+        _xlsx("Amount: 100", "Materials", 2, "boq.xlsx", {"Amount": 100}),
+        _xlsx("Amount: 300", "Labor", 2, "boq.xlsx", {"Amount": 300}),
+    ]
+
+    result = analyze_excel(chunks, operation="average", column="amount")
+
+    assert result["value"] == 200
+    assert result["row_count"] == 2
+    assert result["source_references"] == [
+        "boq.xlsx, sheet Labor, rows 2",
+        "boq.xlsx, sheet Materials, rows 2",
+    ]
+    assert result["sheets"] == ["boq.xlsx, sheet Labor", "boq.xlsx, sheet Materials"]
+
+
 def test_excel_analysis_filters_numeric_thresholds_and_paginates() -> None:
     chunks = [
         _xlsx(

@@ -18,3 +18,8 @@ documents/*
 
 # Editor settings
 .cursor/
+.venv/
+.env
+.streamlit/secrets.toml
+__pycache__/
+.pytest_cache/

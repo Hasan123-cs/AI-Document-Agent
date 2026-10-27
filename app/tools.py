@@ -71,7 +71,7 @@ def analyze_excel(
     sheets = _excel_sheet_columns(excel_chunks)
     if operation == "list_columns":
         return {"sheets": sheets}
-    if operation not in {"filter", "max", "min", "sum", "count"}:
+    if operation not in {"filter", "max", "min", "sum", "count", "average"}:
         return {"error": f"Unsupported Excel analysis operation: {operation}"}
 
     selected_column = column.strip() if isinstance(column, str) else ""
@@ -104,8 +104,8 @@ def analyze_excel(
     if operation == "filter" and threshold_value is None:
         return {"error": "A numeric threshold is required for filtering."}
 
+    numeric_columns = _numeric_columns(excel_chunks)
     if not selected_column:
-        numeric_columns = _numeric_columns(excel_chunks)
         if question_context:
             selected_column = _resolve_column(question_context, numeric_columns) or ""
         if len(numeric_columns) == 1:
@@ -119,6 +119,17 @@ def analyze_excel(
                     else "No numeric Excel columns are available to analyze."
                 ),
                 "numeric_columns": numeric_columns,
+                "available_sheets": sheets,
+            }
+    else:
+        ambiguous_columns = _column_candidates(selected_column, numeric_columns)
+        if len(ambiguous_columns) > 1:
+            return {
+                "error": (
+                    "The requested column matches multiple numeric columns; "
+                    "specify which one to use."
+                ),
+                "numeric_columns": ambiguous_columns,
                 "available_sheets": sheets,
             }
 
@@ -155,12 +166,17 @@ def analyze_excel(
             "available_sheets": sheets,
         }
 
+    resolved_columns = {record[1] for record in records}
+    result_column = (
+        next(iter(resolved_columns)) if len(resolved_columns) == 1 else selected_column
+    )
+
     if operation in {"max", "min"}:
         target = (max if operation == "max" else min)(record[2] for record in records)
         selected_records = [record for record in records if record[2] == target]
         result: dict[str, Any] = {
             "operation": operation,
-            "column": selected_column,
+            "column": result_column,
             "value": _number_for_json(target),
             "row_count": len(selected_records),
             "rows": [_excel_record(record) for record in selected_records[:MAX_EXCEL_PAGE_SIZE]],
@@ -173,7 +189,7 @@ def analyze_excel(
         page = records[safe_offset : safe_offset + safe_limit]
         result = {
             "operation": operation,
-            "column": selected_column,
+            "column": result_column,
             "comparison": comparison,
             "threshold": _number_for_json(threshold_value),
             "row_count": len(records),
@@ -184,10 +200,16 @@ def analyze_excel(
         source_records = records
     else:
         total = sum((record[2] for record in records), Decimal(0))
+        if operation == "count":
+            aggregate_value = len(records)
+        elif operation == "sum":
+            aggregate_value = _number_for_json(total)
+        else:
+            aggregate_value = _number_for_json(total / Decimal(len(records)))
         result = {
             "operation": operation,
-            "column": selected_column,
-            "value": len(records) if operation == "count" else _number_for_json(total),
+            "column": result_column,
+            "value": aggregate_value,
             "row_count": len(records),
         }
         source_records = records
@@ -252,7 +274,7 @@ def _coerce_max_results(max_results: object) -> int:
     except (TypeError, ValueError):
         return DEFAULT_MAX_RESULTS
 
-
+# count number of row for each sheet and return as array 
 def _excel_sheet_columns(chunks: list[DocumentChunk]) -> list[dict[str, object]]:
     sheets: dict[tuple[str, str | None], set[str]] = {}
     row_counts: Counter[tuple[str, str | None]] = Counter()
@@ -308,6 +330,23 @@ def _resolve_column(requested: str, columns: list[str]) -> str | None:
     if exact:
         return None
 
+    candidates = _column_candidates(requested, columns)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _column_candidates(requested: str, columns: list[str]) -> list[str]:
+    """Return headers matching a requested name without guessing between them."""
+    requested_key = _normalize(requested).replace(" ", "")
+    if not requested_key:
+        return []
+    exact = [
+        column
+        for column in columns
+        if _normalize(column).replace(" ", "") == requested_key
+    ]
+    if exact:
+        return exact
+
     terms = set(_normalize(requested).split())
     aliases = set().union(
         *(
@@ -331,7 +370,7 @@ def _resolve_column(requested: str, columns: list[str]) -> str | None:
         )
         if direct_match or alias_match or typo_match:
             candidates.append(column)
-    return candidates[0] if len(candidates) == 1 else None
+    return candidates
 
 
 def _edit_distance_at_most_one(left: str, right: str) -> bool:
@@ -462,7 +501,7 @@ def _excel_record(
         },
     }
 
-
+# return first 240 character from the word 
 def _json_safe_cell(value: object) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value if not isinstance(value, str) else value[:240]
@@ -470,10 +509,11 @@ def _json_safe_cell(value: object) -> object:
         return value.isoformat()
     return str(value)[:240]
 
-
+# add the source use set for no duplicate row number 
 def _source_ranges(
     records: list[tuple[DocumentChunk, str, Decimal, dict[str, object]]],
 ) -> list[str]:
+    # grounped => (file name , shhet name ) and set {1,23,4} the row number 
     grouped: dict[tuple[str, str | None], set[int]] = {}
     for chunk, _, _, _ in records:
         if chunk.row_number is not None:
@@ -535,8 +575,10 @@ def _score_chunk(text: str, query_tokens: list[str]) -> int:
     for token in dict.fromkeys(query_tokens):
         occurrences = counts.get(token, 0)
         if not occurrences:
+            # try find similar word => (amount , amout )
             corrected = _single_typo_match(token, counts)
             if corrected is not None:
+                # if find use their count
                 occurrences = counts[corrected]
         if occurrences:
             unique_matches += 1

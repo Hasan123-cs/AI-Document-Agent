@@ -138,6 +138,9 @@ def test_successful_function_calling_uses_local_search_and_sources() -> None:
         SEARCH_DOCUMENTS_DECLARATION.name,
         ANALYZE_EXCEL_DECLARATION.name,
     ]
+    assert "average" in ANALYZE_EXCEL_DECLARATION.parameters.properties[
+        "operation"
+    ].enum
     assert first_kwargs["config"].thinking_config.thinking_level == types.ThinkingLevel.LOW
     assert (
         first_kwargs["config"].tool_config.function_calling_config.mode
@@ -240,6 +243,8 @@ def test_excel_analysis_is_requested_and_executed_as_a_real_tool_call() -> None:
     assert answer.error is None
     assert answer.text.startswith("The maximum cost")
     assert answer.reference_labels == ["boq.xlsx, sheet Costs, rows 3"]
+    assert answer.excel_results[0]["operation"] == "max"
+    assert answer.excel_results[0]["value"] == 2_500_000
     tool_response = next(
         part.function_response
         for content in client.models.generate_content.call_args_list[1].kwargs["contents"]
@@ -429,6 +434,43 @@ def test_empty_final_text_uses_deterministic_structured_result() -> None:
     assert answer.source_labels() == [
         "unfamiliar.xlsx, sheet Controls, rows 4"
     ]
+
+
+def test_empty_final_text_uses_deterministic_average_result() -> None:
+    chunks = [
+        DocumentChunk(
+            text=f"Activity: {activity} | Budget: {budget}",
+            filename="boq.xlsx",
+            source_type="xlsx",
+            sheet_name="BOQ",
+            row_number=row,
+            excel_values={"Activity": activity, "Budget": budget},
+        )
+        for row, activity, budget in (
+            (2, "Design", 100),
+            (3, "Build", 200),
+            (4, "Test", 300),
+        )
+    ]
+    call = _function_call(
+        "",
+        name="analyze_excel",
+        args={"operation": "average", "column": "budget"},
+    )
+    client = _mock_client(
+        [
+            _response(function_calls=[call]),
+            _response(text=""),
+        ]
+    )
+
+    answer = ask_question("What is the average budget?", chunks, client)
+
+    assert answer.error is None
+    assert answer.text.startswith("Average for Budget: 200.")
+    assert answer.source_labels() == ["boq.xlsx, sheet BOQ, rows 2-4"]
+    assert answer.excel_results[0]["operation"] == "average"
+    assert answer.excel_results[0]["value"] == 200
 
 
 def test_repeated_calls_force_synthesis_without_reexecuting_tool() -> None:
