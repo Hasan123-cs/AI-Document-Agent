@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import sys
 import time
@@ -14,7 +15,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.agent import _api_key_from_env, ask_question
-from app.document_loader import default_documents_dir, load_documents
+from app.document_loader import (
+    MAX_UPLOAD_FILE_BYTES,
+    MAX_UPLOAD_TOTAL_BYTES,
+    load_documents,
+    load_uploaded_document,
+    default_documents_dir,
+    safe_uploaded_filename,
+)
 from app.models import AgentAnswer
 from app.tools import analyze_excel
 
@@ -22,11 +30,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 EXAMPLE_QUESTIONS = (
+    "Summarize the uploaded PDF.",
     "What is the average cost?",
-    "Show items above SAR 100,000.",
+    "Show items with a cost greater than 1000.",
     "What is the total quantity?",
-    "Summarize the project requirements.",
+    "Which page mentions payment conditions?",
 )
+MAX_UPLOAD_COUNT = 10
 
 
 def should_skip_duplicate_request(clicked: bool, in_flight: bool) -> bool:
@@ -43,9 +53,11 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     _render_styles()
-    chunks = _ensure_documents_loaded()
-    _show_sidebar(chunks)
+    _ensure_documents_loaded()
     _show_header()
+    _show_upload_section()
+    chunks = _current_document_chunks()
+    _show_sidebar(chunks)
     _show_summary_cards(chunks)
     _show_question_form(chunks)
     _show_conversation(chunks)
@@ -194,9 +206,30 @@ def _ensure_documents_loaded() -> list:
         st.session_state.in_flight = False
     if "conversation" not in st.session_state:
         st.session_state.conversation = []
+    if "uploaded_documents" not in st.session_state:
+        st.session_state.uploaded_documents = {}
+    if "upload_widget_generation" not in st.session_state:
+        st.session_state.upload_widget_generation = 0
     if "chunks" not in st.session_state:
         _reload_documents()
-    return st.session_state.chunks
+    return _current_document_chunks()
+
+
+def _current_document_chunks() -> list:
+    """Combine the cached local files with this Streamlit session's uploads."""
+    return _combine_document_chunks(
+        st.session_state.get("chunks", []),
+        st.session_state.get("uploaded_documents", {}),
+    )
+
+
+def _combine_document_chunks(local_chunks: list, uploaded_documents: dict) -> list:
+    """Combine local chunks with successful uploads from one session state."""
+    chunks = list(local_chunks)
+    for uploaded in uploaded_documents.values():
+        if uploaded.get("status") == "ready":
+            chunks.extend(uploaded["chunks"])
+    return chunks
 
 
 def _folder_signature(folder: Path) -> str:
@@ -239,8 +272,173 @@ def _reload_documents() -> None:
 def _document_counts(chunks: list) -> tuple[list[str], int, int]:
     filenames = sorted({chunk.filename for chunk in chunks})
     pdf_count = sum(Path(name).suffix.lower() == ".pdf" for name in filenames)
-    excel_count = sum(Path(name).suffix.lower() == ".xlsx" for name in filenames)
+    excel_count = sum(Path(name).suffix.lower() in {".xlsx", ".xls"} for name in filenames)
     return filenames, pdf_count, excel_count
+
+
+def _format_file_size(size: int) -> str:
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _show_upload_section() -> None:
+    """Accept, validate, and list uploads without persisting their raw bytes."""
+    st.markdown("### Add documents")
+    st.caption(
+        "Upload PDF or Excel files to analyze them alongside documents in the "
+        "workspace folder. Files stay in this browser session."
+    )
+    generation = st.session_state.upload_widget_generation
+    uploader_key = f"document_uploader_{generation}"
+    uploaded_files = st.file_uploader(
+        "Upload PDF or Excel documents",
+        type=["pdf", "xlsx", "xls"],
+        accept_multiple_files=True,
+        key=uploader_key,
+        max_upload_size=MAX_UPLOAD_FILE_BYTES // (1024 * 1024),
+        help=(
+            "Up to 10 files and 30 MB total per session; maximum 10 MB per file. "
+            "Supported formats: PDF, XLSX, XLS."
+        ),
+    )
+    if uploaded_files:
+        if _process_uploaded_files(uploaded_files):
+            st.session_state.upload_widget_generation += 1
+            st.rerun()
+
+    documents = st.session_state.uploaded_documents
+    if documents:
+        st.markdown("#### Uploaded documents")
+        for upload_id, uploaded in list(documents.items()):
+            suffix = Path(uploaded["filename"]).suffix.lower()
+            icon = "📕" if suffix == ".pdf" else "📊"
+            columns = st.columns([6, 2, 1])
+            columns[0].write(f"{icon} {uploaded['filename']}")
+            columns[1].caption(_format_file_size(uploaded["size"]))
+            if uploaded["status"] == "ready":
+                columns[1].success(f"{len(uploaded['chunks'])} chunks")
+            else:
+                st.error(f"{uploaded['filename']}: {uploaded['error']}")
+            columns[2].button(
+                "Remove",
+                key=f"remove_upload_{upload_id}",
+                on_click=_remove_uploaded_document,
+                args=(upload_id,),
+                use_container_width=True,
+            )
+        st.caption(
+            f"{sum(item['size'] for item in documents.values()):,} bytes across "
+            f"{len(documents)} upload(s)"
+        )
+    st.button(
+        "Clear Uploaded Documents",
+        key="clear_uploaded_documents",
+        on_click=_clear_uploaded_documents,
+        disabled=not documents,
+    )
+
+
+def _process_uploaded_files(uploaded_files: list) -> bool:
+    """Process each new upload once, retaining chunks and status only."""
+    documents = st.session_state.uploaded_documents
+    processed_new_file = False
+    for uploaded in uploaded_files:
+        content = uploaded.getvalue()
+        filename = safe_uploaded_filename(uploaded.name)
+        upload_id = hashlib.sha256(
+            filename.encode("utf-8") + b"\0" + content
+        ).hexdigest()
+        if upload_id in documents:
+            continue
+
+        processed_new_file = True
+
+        size = len(content)
+        record: dict[str, object] = {
+            "filename": filename,
+            "size": size,
+            "status": "error",
+            "chunks": [],
+            "error": "",
+        }
+        documents[upload_id] = record
+
+        if len(documents) > MAX_UPLOAD_COUNT:
+            record["error"] = f"Session limit is {MAX_UPLOAD_COUNT} uploaded files."
+            del content
+            continue
+
+        total_size = size + sum(
+            int(item["size"])
+            for item in documents.values()
+            if item.get("status") == "ready"
+        )
+        if size > MAX_UPLOAD_FILE_BYTES:
+            record["error"] = (
+                f"File exceeds the {MAX_UPLOAD_FILE_BYTES // (1024 * 1024)} MB per-file limit."
+            )
+            del content
+            continue
+        if total_size > MAX_UPLOAD_TOTAL_BYTES:
+            record["error"] = (
+                f"Session upload limit is "
+                f"{MAX_UPLOAD_TOTAL_BYTES // (1024 * 1024)} MB total."
+            )
+            del content
+            continue
+
+        try:
+            used_names = {chunk.filename for chunk in _current_document_chunks()}
+            if filename in used_names:
+                path = Path(filename)
+                filename = (
+                    f"{path.stem} (upload {upload_id[:8]}){path.suffix.lower()}"
+                )
+                record["filename"] = filename
+            with st.spinner(f"Processing {filename}..."):
+                chunks = load_uploaded_document(filename, content)
+            record["chunks"] = chunks
+            record["status"] = "ready"
+            _invalidate_conversation()
+            st.success(f"Uploaded and processed {filename}.")
+        except ValueError as exc:
+            record["error"] = str(exc)
+            logger.info(
+                "upload.rejected filename=%s size=%s reason=%s",
+                filename,
+                size,
+                str(exc),
+            )
+        except Exception as exc:
+            record["error"] = "The document could not be processed."
+            logger.exception(
+                "upload.processing_failed filename=%s error_type=%s",
+                filename,
+                type(exc).__name__,
+            )
+        finally:
+            del content
+    return processed_new_file
+
+
+def _remove_uploaded_document(upload_id: str) -> None:
+    """Remove one upload and its chunks from this user's active collection."""
+    st.session_state.uploaded_documents.pop(upload_id, None)
+    st.session_state.upload_widget_generation += 1
+    _invalidate_conversation()
+
+
+def _clear_uploaded_documents() -> None:
+    """Clear every uploaded document and reset the uploader widget selection."""
+    st.session_state.uploaded_documents = {}
+    st.session_state.upload_widget_generation += 1
+    _invalidate_conversation()
+
+
+def _invalidate_conversation() -> None:
+    st.session_state.answer = None
+    st.session_state.conversation = []
 
 
 def _show_sidebar(chunks: list) -> None:
@@ -261,10 +459,16 @@ def _show_sidebar(chunks: list) -> None:
 
         with st.expander("Loaded files", expanded=True):
             if filenames:
+                uploaded_names = {
+                    item["filename"]
+                    for item in st.session_state.uploaded_documents.values()
+                    if item.get("status") == "ready"
+                }
                 for filename in filenames:
                     suffix = Path(filename).suffix.lower()
                     icon = "📕" if suffix == ".pdf" else "📊"
-                    st.markdown(f"{icon} **{filename}**")
+                    source_label = "Uploaded" if filename in uploaded_names else "Local"
+                    st.text(f"{icon} {filename} · {source_label}")
             else:
                 st.info("No supported documents are loaded.")
             st.caption(f"Folder: {st.session_state.get('documents_dir', str(default_documents_dir()))}")

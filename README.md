@@ -6,7 +6,8 @@ Developed as a technical assessment for the **Junior Software & IT Support** rol
 
 ## Features
 
-- **PDF and Excel Processing:** Reads supported documents from a local folder and extracts their content.
+- **PDF and Excel Processing:** Reads PDF, XLSX, and XLS documents from the local folder or native Streamlit multi-file upload.
+- **Session-Isolated Uploads:** Uploaded documents are processed in memory, available only to the current Streamlit session, and removed when cleared or the session ends.
 - **Natural-Language Question Answering:** Users can ask questions through a simple Streamlit web interface.
 - **Responsive Analysis Dashboard:** A professional, mobile-aware workspace for document status, chat, source citations, and structured spreadsheet results.
 - **AI Function Calling:** Google Gemini selects appropriate tools to search documents or analyze Excel data.
@@ -106,6 +107,9 @@ Never commit your actual API key to GitHub.
 ### 5. Add Documents
 
 Place your PDF and Excel files inside the `documents/` directory.
+You can also upload multiple PDF, XLSX, or XLS files from the dashboard. Uploads are
+limited to 10 MB per file and 30 MB total per session, processed in memory, and not
+written to the documents folder.
 
 Example:
 
@@ -129,12 +133,22 @@ Streamlit will display a local URL where you can access the application.
 ## How It Works
 
 1. The application reads PDF and Excel files from the documents folder.
-2. Extracted content is converted into searchable document chunks with source metadata.
-3. The user submits a natural-language question through the Streamlit interface.
-4. The Gemini agent uses function calling to select an appropriate document analysis tool.
-5. The selected tool searches document content or performs structured Excel analysis.
-6. The agent returns an answer with available source references.
-7. If Gemini is unavailable, the application can return local search results as a fallback.
+2. The user may additionally upload PDF and Excel documents; each upload is validated and converted to source-aware chunks in the current Streamlit session.
+3. Extracted local and uploaded content is combined into searchable document chunks with source metadata.
+4. The user submits a natural-language question through the Streamlit interface.
+5. The Gemini agent uses function calling to select an appropriate document analysis tool.
+6. The selected tool searches document content or performs structured Excel analysis.
+7. The agent returns an answer with available source references.
+8. If Gemini is unavailable, the application can return local search results as a fallback.
+
+### Streamlit Community Cloud
+
+Deploy the repository using `app/main.py` as the app entry point, configure
+`GEMINI_API_KEY` in the app's Streamlit secrets, and use the repository's
+`requirements.txt` for dependencies. The uploader uses session state rather than
+shared or permanent upload storage, so each visitor's uploaded chunks are scoped
+to that visitor's Streamlit session. Local files in `documents/` remain available
+to every visitor; do not put private documents in that folder on a public deploy.
 
 ## Example Questions
 
@@ -183,7 +197,6 @@ For development time, key design decisions, and potential improvements, see [`DE
 ## Project Purpose
 
 This application demonstrates AI-assisted software development, LLM tool calling, document processing, structured data analysis, and a practical user interface for interacting with project documents.
-
 
 
 

@@ -4,7 +4,7 @@
 
 ## Project overview
 
-A local-document question-answering application built with **Python, Streamlit, Google Gemini (google-genai SDK), pandas, openpyxl, and PyMuPDF**. It reads `.pdf` and `.xlsx` files from the project-level `documents/` folder (the supplied UI does **not** implement browser uploads). It extracts source-aware `DocumentChunk`s, offers Gemini two local Python tools (`search_documents`, `analyze_excel`), and displays grounded answers and source references. Gemini selects function calls; **Python executes them**. The application does not upload complete documents to Gemini in bulk. Search passages and bounded tool results are sent to the model.
+A local-document question-answering application built with **Python, Streamlit, Google Gemini (google-genai SDK), pandas, openpyxl/xlrd, and PyMuPDF**. It reads `.pdf`, `.xlsx`, and `.xls` files from the project-level `documents/` folder and accepts session-scoped uploads through Streamlit. Both sources become source-aware `DocumentChunk`s and use the same local Python tools (`search_documents`, `analyze_excel`). Gemini selects function calls; **Python executes them**. The application does not upload complete documents to Gemini in bulk. Search passages and bounded tool results are sent to the model.
 
 ## Directory and module responsibilities
 
@@ -26,14 +26,15 @@ project/
 ## End-to-end flow
 
 1. Streamlit `main()` calls `_ensure_documents_loaded()` and displays loaded-file/chunk counts.
-2. `load_documents()` scans the local `documents/` folder, dispatching `.pdf` to `load_pdf()` and `.xlsx` to `load_xlsx()`.
-3. PDF: one non-empty text chunk per page, with filename and 1-based page number. XLSX: detect likely header row per sheet, then one non-empty chunk per data row, preserving filename, sheet, original 1-based Excel row and typed `excel_values`.
-4. User submits question; UI invokes `ask_question(question, chunks)`.
-5. `DocumentAgent.ask()` validates question/chunks, obtains Gemini client, and sends user question with system instruction and function declarations.
-6. Gemini may return text or one/more function calls. `_response_function_calls()` extracts calls; `_run_tool_call()` safely invokes `_execute_tool()`, which dispatches local Python search/Excel operations and caches results.
-7. Tool results are returned to Gemini as `types.FunctionResponse` parts. Loop is bounded by tool-round and call budgets; repeated calls are tracked.
-8. Agent returns `AgentAnswer(text, sources, reference_labels, error, elapsed_seconds, is_fallback, model, excel_results)`. Streamlit displays the conversation, structured Excel tables/calculations, model, response time, and deduplicated citations.
-9. On missing/unavailable Gemini API, local keyword fallback is clearly labeled; after completed Excel operations, deterministic Excel answer can be synthesized without Gemini. Ambiguous numeric column can trigger a clarification.
+2. `load_documents()` scans the local `documents/` folder; native file uploads are validated and parsed in memory by `load_uploaded_document()`. Upload bytes are not written to shared or persistent storage.
+3. PDF: one non-empty text chunk per page, with filename and 1-based page number. Excel: detect likely header row per sheet, then one non-empty chunk per data row, preserving filename, sheet, original 1-based Excel row and typed `excel_values`.
+4. Session-local upload chunks are combined with cached local chunks for the current visitor only. Remove/clear invalidates the displayed answer and conversation.
+5. User submits question; UI invokes `ask_question(question, combined_chunks)`.
+6. `DocumentAgent.ask()` validates question/chunks, obtains Gemini client, and sends user question with system instruction and function declarations.
+7. Gemini may return text or one/more function calls. `_response_function_calls()` extracts calls; `_run_tool_call()` safely invokes `_execute_tool()`, which dispatches local Python search/Excel operations and caches results.
+8. Tool results are returned to Gemini as `types.FunctionResponse` parts. Loop is bounded by tool-round and call budgets; repeated calls are tracked.
+9. Agent returns `AgentAnswer(text, sources, reference_labels, error, elapsed_seconds, is_fallback, model, excel_results)`. Streamlit displays the conversation, structured Excel tables/calculations, model, response time, and deduplicated citations.
+10. On missing/unavailable Gemini API, local keyword fallback is clearly labeled; after completed Excel operations, deterministic Excel answer can be synthesized without Gemini. Ambiguous numeric column can trigger a clarification.
 
 ## Data contracts
 
@@ -50,14 +51,14 @@ project/
 - `THINKING_LEVEL = LOW`, `REQUEST_TIMEOUT_MS = 30000`, `RETRY_ATTEMPTS = 1` (SDK retry configuration; do not assume this guarantees a retry).
 - Tool definitions are `SEARCH_DOCUMENTS_DECLARATION` and `ANALYZE_EXCEL_DECLARATION`. `automatic_function_calling` is disabled, so Python explicitly executes returned function calls. Function-calling mode `AUTO` lets Gemini decide between tool call and text.
 - `SYSTEM_INSTRUCTION` requires evidence-based answers, source citations, no fabricated numbers, numeric aggregation (including average/mean) through `analyze_excel` rather than search hits, clarification when ambiguous, and pagination awareness.
-- `.env` supplies `GEMINI_API_KEY`; `_safe_log_arguments()` and `_safe_tool_error()` redact potentially sensitive log details. Never paste actual secrets into this file or commits.
+- `.env` or Streamlit app secrets supply `GEMINI_API_KEY`; `_safe_log_arguments()` and `_safe_tool_error()` redact potentially sensitive log details. Never paste actual secrets into this file or commits.
 - The tool cache is reset at the start of each `DocumentAgent.ask()` invocation. Streamlit's `@st.cache_data` for document parsing is a **different cache**.
 
 ## Tool semantics (`app/tools.py`)
 
 **`search_documents(chunks, query, max_results=5)`**: deterministic local keyword ranking (no embeddings or vector database). Normalizes to lowercase alphanumeric tokens; `_score_chunk` gives +100 for each distinct matched query token, +20 for full phrase match, and a term-frequency tie breaker. Supports one-edit typo matching for sufficiently long tokens. Returns top ranked `SearchResult`s with source metadata.
 
-**`analyze_excel(chunks, operation, column=None, threshold=None, comparison="greater_than", offset=0, limit=50, question_context=None)`**: works only on XLSX chunks. Operations: `list_columns`, `filter`, `max`, `min`, `sum`, `average`, `count`. Uses `_resolve_column` to map user column names to sheet headers, including normalized direct matches, aliases and limited typo matching; refuses ambiguous matches. Uses `_parse_number` returning `Decimal` or `None` to ignore nonnumeric cells and handle currencies, separators, negatives and k/m/b suffixes. Filters numeric records by optional threshold/comparison. `filter` returns `row_count` (total matches), current `rows`, `offset`, and `next_offset`; each page capped at 50. `max/min` returns extremum and matching rows (up to 50); `sum/count/average` aggregate all matching numeric records, not just a page. Average divides the Decimal sum by the count of valid numeric records. Outputs include source references for Excel rows.
+**`analyze_excel(chunks, operation, column=None, threshold=None, comparison="greater_than", offset=0, limit=50, question_context=None)`**: works on loaded Excel chunks from `.xlsx` and `.xls` sources. Operations: `list_columns`, `filter`, `max`, `min`, `sum`, `average`, `count`. Uses `_resolve_column` to map user column names to sheet headers, including normalized direct matches, aliases and limited typo matching; refuses ambiguous matches. Uses `_parse_number` returning `Decimal` or `None` to ignore nonnumeric cells and handle currencies, separators, negatives and k/m/b suffixes. Filters numeric records by optional threshold/comparison. `filter` returns `row_count` (total matches), current `rows`, `offset`, and `next_offset`; each page capped at 50. `max/min` returns extremum and matching rows (up to 50); `sum/count/average` aggregate all matching numeric records, not just a page. Average divides the Decimal sum by the count of valid numeric records. Outputs include source references for Excel rows.
 
 **Important:** `count` counts valid numeric matching records in the chosen column, not all rows in a sheet. `_resolve_column()` returns `None` on ambiguity rather than guessing. Excel `row_number` is the original 1-based worksheet row, not a pandas index. `_find_header_row()` is a heuristic, not guaranteed perfect.
 
@@ -83,6 +84,11 @@ The following index includes **all defined functions and methods in the supplied
 - **`should_skip_duplicate_request(clicked, in_flight)`** — Prevent repeat submission during an in-flight request.
 - **`main()`** — Configure and render the responsive Streamlit dashboard.
 - **`_ensure_documents_loaded()`** — Initialize session state and load chunks once.
+- **`_current_document_chunks()`** — Combine local cached chunks with this session's ready uploads.
+- **`_show_upload_section()`** — Validate/process multiple PDF and Excel uploads, show status, and offer remove/clear actions.
+- **`_process_uploaded_files(uploaded_files)`** — Convert each new in-memory upload to `DocumentChunk`s without retaining raw bytes.
+- **`_remove_uploaded_document(upload_id)`** — Remove one session upload and invalidate answers.
+- **`_clear_uploaded_documents()`** — Clear session uploads and invalidate answers.
 - **`_folder_signature(folder)`** — Fingerprint local files by filename, modification time and size.
 - **`_load_documents_cached(folder, signature)`** — Streamlit-cached parsing of local documents.
 - **`_reload_documents()`** — Reload local chunks and reset the conversation.
@@ -96,6 +102,7 @@ The following index includes **all defined functions and methods in the supplied
 
 - **`default_documents_dir()`** — Return project documents/ path.
 - **`load_documents(directory=None)`** — Read supported files; skip unsupported/broken files and log errors.
+- **`load_uploaded_document(filename, content)`** — Validate bounded in-memory uploads and extract PDF/XLSX/XLS with source metadata.
 - **`load_pdf(path)`** — PyMuPDF text extraction; one chunk per nonempty page.
 - **`load_xlsx(path)`** — pandas/openpyxl reading of every worksheet.
 - **`_load_file(path)`** — Dispatch by extension.

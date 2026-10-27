@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.document_loader import load_documents, load_pdf, load_xlsx
+import pytest
+
+from app.document_loader import (
+    MAX_UPLOAD_FILE_BYTES,
+    load_documents,
+    load_pdf,
+    load_uploaded_document,
+    load_xlsx,
+)
 from app.models import DocumentChunk
 
 
@@ -114,3 +122,83 @@ def test_load_documents_reads_pdf_and_xlsx_from_folder(
     assert any(chunk.source_type == "pdf" for chunk in chunks)
     assert any(chunk.source_type == "xlsx" for chunk in chunks)
     assert all(chunk.text.strip() for chunk in chunks)
+
+
+def test_uploaded_pdf_preserves_filename_and_page_references(
+    sample_pdf_path: Path,
+) -> None:
+    chunks = load_uploaded_document(sample_pdf_path.name, sample_pdf_path.read_bytes())
+
+    assert [chunk.page_number for chunk in chunks] == [1, 2]
+    assert {chunk.filename for chunk in chunks} == {"sample.pdf"}
+    assert chunks[0].text == "Alpha page content"
+
+
+def test_uploaded_excel_preserves_sheet_and_row_references(
+    sample_xlsx_path: Path,
+) -> None:
+    chunks = load_uploaded_document(
+        sample_xlsx_path.name,
+        sample_xlsx_path.read_bytes(),
+    )
+
+    inventory = [chunk for chunk in chunks if chunk.sheet_name == "Inventory"]
+    assert len(inventory) == 1
+    assert inventory[0].filename == "sample.xlsx"
+    assert inventory[0].row_number == 2
+    assert inventory[0].excel_values == {"Item": "Widget", "Qty": 3}
+
+
+def test_multiple_uploads_can_be_processed_together(
+    sample_pdf_path: Path,
+    sample_xlsx_path: Path,
+) -> None:
+    chunks = [
+        *load_uploaded_document(sample_pdf_path.name, sample_pdf_path.read_bytes()),
+        *load_uploaded_document(sample_xlsx_path.name, sample_xlsx_path.read_bytes()),
+    ]
+
+    assert {chunk.filename for chunk in chunks} == {"sample.pdf", "sample.xlsx"}
+    assert any(chunk.page_number == 2 for chunk in chunks if chunk.source_type == "pdf")
+    assert any(
+        chunk.sheet_name == "Inventory" and chunk.row_number == 2
+        for chunk in chunks
+        if chunk.source_type == "xlsx"
+    )
+
+
+def test_uploaded_invalid_extension_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unsupported file type"):
+        load_uploaded_document("notes.txt", b"not a document")
+
+
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        ("bad.pdf", b"%PDF- but invalid"),
+        ("bad.xlsx", b"not a zip workbook"),
+        ("bad.xls", bytes.fromhex("D0CF11E0A1B11AE1") + b"not an xls workbook"),
+    ],
+)
+def test_uploaded_corrupt_documents_are_rejected(
+    filename: str,
+    content: bytes,
+) -> None:
+    with pytest.raises(ValueError):
+        load_uploaded_document(filename, content)
+
+
+def test_oversized_upload_is_rejected_before_parsing() -> None:
+    with pytest.raises(ValueError, match="per-file limit"):
+        load_uploaded_document(
+            "large.pdf",
+            b"%PDF-" + b"0" * MAX_UPLOAD_FILE_BYTES,
+        )
+
+
+def test_uploaded_filename_is_sanitized(sample_pdf_path: Path) -> None:
+    chunks = load_uploaded_document(
+        r"..\..\sample.pdf",
+        sample_pdf_path.read_bytes(),
+    )
+    assert chunks[0].filename == "sample.pdf"

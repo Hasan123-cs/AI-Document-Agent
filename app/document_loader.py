@@ -7,8 +7,10 @@ module calls Gemini or any other remote API.
 
 from __future__ import annotations
 
+import io
 import logging
 import time
+import zipfile
 from pathlib import Path
 from typing import Iterable
 
@@ -19,7 +21,14 @@ from app.models import DocumentChunk
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".xlsx"}
+SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".xls"}
+MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024
+MAX_UPLOAD_TOTAL_BYTES = 30 * 1024 * 1024
+MAX_UPLOAD_UNPACKED_BYTES = 50 * 1024 * 1024
+MAX_UPLOAD_SHEETS = 20
+MAX_UPLOAD_ROWS_PER_SHEET = 20_000
+MAX_UPLOAD_CELLS = 250_000
+MAX_UPLOAD_PDF_PAGES = 500
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DOCUMENTS_DIR = PROJECT_ROOT / "documents"
 
@@ -80,35 +89,111 @@ def load_documents(directory: str | Path | None = None) -> list[DocumentChunk]:
 def load_pdf(path: str | Path) -> list[DocumentChunk]:
     """Extract non-empty text from each page of a PDF using PyMuPDF."""
     pdf_path = Path(path)
-    chunks: list[DocumentChunk] = []
-
     with pymupdf.open(pdf_path) as document:
-        for page_index in range(document.page_count):
-            page = document.load_page(page_index)
-            text = (page.get_text("text") or "").strip()
-            if not text:
-                continue
-            chunks.append(
-                DocumentChunk(
-                    text=text,
-                    filename=pdf_path.name,
-                    source_type="pdf",
-                    page_number=page_index + 1,
-                )
-            )
-
-    return chunks
+        return _chunks_from_pdf(document, pdf_path.name)
 
 
 def load_xlsx(path: str | Path) -> list[DocumentChunk]:
     """Extract non-empty rows from every sheet of an Excel workbook."""
     xlsx_path = Path(path)
-    sheets = pd.read_excel(
-        xlsx_path,
-        sheet_name=None,
-        engine="openpyxl",
-        header=None,
-    )
+    engine = "xlrd" if xlsx_path.suffix.lower() == ".xls" else "openpyxl"
+    sheets = pd.read_excel(xlsx_path, sheet_name=None, engine=engine, header=None)
+    return _chunks_from_workbook(sheets, xlsx_path.name)
+
+
+def load_uploaded_document(filename: str, content: bytes) -> list[DocumentChunk]:
+    """Validate and extract one in-memory uploaded PDF or Excel workbook."""
+    safe_filename = safe_uploaded_filename(filename)
+    suffix = Path(safe_filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise ValueError("Unsupported file type. Upload a PDF, XLSX, or XLS file.")
+    if not content:
+        raise ValueError("The uploaded file is empty.")
+    if len(content) > MAX_UPLOAD_FILE_BYTES:
+        raise ValueError(
+            f"File exceeds the {MAX_UPLOAD_FILE_BYTES // (1024 * 1024)} MB per-file limit."
+        )
+
+    try:
+        if suffix == ".pdf":
+            if not content.startswith(b"%PDF-"):
+                raise ValueError("The file extension does not match a valid PDF document.")
+            with pymupdf.open(stream=content, filetype="pdf") as document:
+                if document.page_count > MAX_UPLOAD_PDF_PAGES:
+                    raise ValueError(
+                        f"PDF exceeds the {MAX_UPLOAD_PDF_PAGES}-page processing limit."
+                    )
+                chunks = _chunks_from_pdf(document, safe_filename)
+        else:
+            engine = "xlrd" if suffix == ".xls" else "openpyxl"
+            if suffix == ".xlsx":
+                _validate_xlsx_archive(content)
+            elif not content.startswith(bytes.fromhex("D0CF11E0A1B11AE1")):
+                raise ValueError("The file extension does not match a valid XLS workbook.")
+            excel_file = pd.ExcelFile(io.BytesIO(content), engine=engine)
+            try:
+                if len(excel_file.sheet_names) > MAX_UPLOAD_SHEETS:
+                    raise ValueError(
+                        f"Workbook exceeds the {MAX_UPLOAD_SHEETS}-sheet processing limit."
+                    )
+                sheets = {
+                    sheet_name: excel_file.parse(sheet_name, header=None)
+                    for sheet_name in excel_file.sheet_names
+                }
+            finally:
+                excel_file.close()
+            total_cells = 0
+            for frame in sheets.values():
+                if len(frame.index) > MAX_UPLOAD_ROWS_PER_SHEET:
+                    raise ValueError(
+                        "A worksheet exceeds the "
+                        f"{MAX_UPLOAD_ROWS_PER_SHEET:,}-row processing limit."
+                    )
+                total_cells += frame.size
+                if total_cells > MAX_UPLOAD_CELLS:
+                    raise ValueError(
+                        f"Workbook exceeds the {MAX_UPLOAD_CELLS:,}-cell processing limit."
+                    )
+            chunks = _chunks_from_workbook(sheets, safe_filename)
+    except ValueError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Uploaded document could not be processed filename=%s type=%s",
+            safe_filename,
+            type(exc).__name__,
+        )
+        raise ValueError(
+            "The file is invalid, corrupted, or could not be read as the selected type."
+        ) from exc
+
+    if not chunks:
+        raise ValueError("No readable document content was found in the uploaded file.")
+    return chunks
+
+
+def _chunks_from_pdf(document: pymupdf.Document, filename: str) -> list[DocumentChunk]:
+    chunks: list[DocumentChunk] = []
+    for page_index in range(document.page_count):
+        page = document.load_page(page_index)
+        text = (page.get_text("text") or "").strip()
+        if not text:
+            continue
+        chunks.append(
+            DocumentChunk(
+                text=text,
+                filename=filename,
+                source_type="pdf",
+                page_number=page_index + 1,
+            )
+        )
+    return chunks
+
+
+def _chunks_from_workbook(
+    sheets: dict[str, pd.DataFrame],
+    filename: str,
+) -> list[DocumentChunk]:
     chunks: list[DocumentChunk] = []
 
     for sheet_name, raw_frame in sheets.items():
@@ -116,7 +201,7 @@ def load_xlsx(path: str | Path) -> list[DocumentChunk]:
         frame = _frame_with_headers(raw_frame, header_row)
         chunks.extend(
             _chunks_from_sheet(
-                xlsx_path.name,
+                filename,
                 str(sheet_name),
                 frame,
                 row_number_offset=header_row + 2,
@@ -126,12 +211,40 @@ def load_xlsx(path: str | Path) -> list[DocumentChunk]:
     return chunks
 
 
+def _validate_xlsx_archive(content: bytes) -> None:
+    """Reject non-workbooks and highly expanded archives before parsing."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            names = set(archive.namelist())
+            if "[Content_Types].xml" not in names or "xl/workbook.xml" not in names:
+                raise ValueError("The file extension does not match a valid XLSX workbook.")
+            if sum(entry.file_size for entry in archive.infolist()) > MAX_UPLOAD_UNPACKED_BYTES:
+                raise ValueError("Workbook expands beyond the safe processing limit.")
+            if sum(name.startswith("xl/worksheets/sheet") for name in names) > MAX_UPLOAD_SHEETS:
+                raise ValueError(
+                    f"Workbook exceeds the {MAX_UPLOAD_SHEETS}-sheet processing limit."
+                )
+    except zipfile.BadZipFile as exc:
+        raise ValueError("The file extension does not match a valid XLSX workbook.") from exc
+
+
+def safe_uploaded_filename(filename: str) -> str:
+    """Strip path components and control characters from the displayed/source name."""
+    basename = filename.replace("\\", "/").split("/")[-1]
+    sanitized = "".join(
+        character
+        for character in basename
+        if character.isalnum() or character in " ._-()"
+    ).strip(" .")
+    return sanitized or "uploaded-document"
+
+
 def _load_file(path: Path) -> list[DocumentChunk]:
     """Dispatch a supported file to the matching loader."""
     suffix = path.suffix.lower()
     if suffix == ".pdf":
         return load_pdf(path)
-    if suffix == ".xlsx":
+    if suffix in {".xlsx", ".xls"}:
         return load_xlsx(path)
     return []
 

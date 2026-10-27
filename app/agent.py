@@ -16,6 +16,8 @@ import time
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 from app.models import AgentAnswer, DocumentChunk
 from app.tools import (
@@ -702,9 +704,15 @@ def format_source(result: SearchResult) -> str:
 
 
 def _api_key_from_env() -> str:
-    """Read GEMINI_API_KEY without logging or returning a missing value as secrets."""
+    """Read the key from the environment or Streamlit's app secrets."""
     load_dotenv()
-    return (os.getenv("GEMINI_API_KEY") or "").strip()
+    environment_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if environment_key:
+        return environment_key
+    try:
+        return str(st.secrets["GEMINI_API_KEY"]).strip()
+    except (KeyError, StreamlitSecretNotFoundError):
+        return ""
 
 
 def _shared_client(api_key: str) -> object:

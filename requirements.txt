@@ -2,6 +2,7 @@ streamlit
 pymupdf
 pandas
 openpyxl
+xlrd
 python-dotenv
 google-genai
 pytest

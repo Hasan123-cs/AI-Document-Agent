@@ -624,6 +624,19 @@ def test_missing_api_key_does_not_call_gemini(monkeypatch) -> None:
     client_factory.assert_not_called()
 
 
+def test_gemini_key_can_be_read_from_streamlit_secrets(monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr("app.agent.load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        "app.agent.st",
+        SimpleNamespace(secrets={"GEMINI_API_KEY": "cloud-secret"}),
+    )
+
+    from app.agent import _api_key_from_env
+
+    assert _api_key_from_env() == "cloud-secret"
+
+
 def test_gemini_api_failure_is_handled() -> None:
     client = MagicMock()
     client.models.generate_content.side_effect = RuntimeError("service unavailable")

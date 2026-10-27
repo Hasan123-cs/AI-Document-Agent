@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.models import DocumentChunk
+from app.document_loader import load_uploaded_document
 from app.tools import analyze_excel, search_documents
 
 
@@ -402,3 +405,31 @@ def test_excel_analysis_filters_numeric_thresholds_and_paginates() -> None:
     assert first_page["next_offset"] == 1
     assert second_page["rows"][0]["row_number"] == 4
     assert second_page["next_offset"] is None
+
+
+def test_uploaded_excel_chunks_support_existing_aggregations(
+    tmp_path: Path,
+) -> None:
+    import pandas as pd
+
+    workbook_path = tmp_path / "uploaded_costs.xlsx"
+    pd.DataFrame(
+        [
+            {"Item": "A", "Cost": 1000, "Quantity": 2},
+            {"Item": "B", "Cost": 3000, "Quantity": 4},
+        ]
+    ).to_excel(workbook_path, index=False)
+    chunks = load_uploaded_document(
+        workbook_path.name,
+        workbook_path.read_bytes(),
+    )
+
+    average = analyze_excel(chunks, operation="average", column="cost")
+    total_quantity = analyze_excel(chunks, operation="sum", column="quantity")
+
+    assert average["value"] == 2000
+    assert average["source_references"] == [
+        "uploaded_costs.xlsx, sheet Sheet1, rows 2-3"
+    ]
+    assert total_quantity["value"] == 6
+    assert total_quantity["row_count"] == 2
