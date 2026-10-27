@@ -100,8 +100,11 @@ Create a `.env` file in the project root:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-3.1-flash-lite
 ```
 
+`GEMINI_MODEL` is optional; the default is `gemini-3.1-flash-lite`. The agent
+uses the configured model as-is and does not silently switch to another model.
 Never commit your actual API key to GitHub.
 
 ### 5. Add Documents
@@ -143,9 +146,20 @@ Streamlit will display a local URL where you can access the application.
 
 ### Streamlit Community Cloud
 
-Deploy the repository using `app/main.py` as the app entry point, configure
-`GEMINI_API_KEY` in the app's Streamlit secrets, and use the repository's
-`requirements.txt` for dependencies. The uploader uses session state rather than
+Deploy the repository using `app/main.py` as the app entry point, and configure
+`GEMINI_API_KEY` and (optionally) `GEMINI_MODEL` in the app's Streamlit secrets.
+For example:
+
+```toml
+GEMINI_API_KEY = "your_gemini_api_key"
+GEMINI_MODEL = "gemini-3.1-flash-lite"
+```
+
+The Streamlit entry point reads these settings and makes them available to the
+agent without coupling the agent module to Streamlit. The model name is used
+exactly as configured; authentication, model-access, quota, network, and
+availability failures are diagnosed separately. Temporary Gemini service
+failures retain the local-search fallback. The uploader uses session state rather than
 shared or permanent upload storage, so each visitor's uploaded chunks are scoped
 to that visitor's Streamlit session. Local files in `documents/` remain available
 to every visitor; do not put private documents in that folder on a public deploy.
@@ -197,7 +211,6 @@ For development time, key design decisions, and potential improvements, see [`DE
 ## Project Purpose
 
 This application demonstrates AI-assisted software development, LLM tool calling, document processing, structured data analysis, and a practical user interface for interacting with project documents.
-
 
 
 

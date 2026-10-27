@@ -46,12 +46,12 @@ project/
 
 ## Gemini configuration and safety boundaries (`app/agent.py`)
 
-- Default `MODEL_NAME = "gemini-3.1-flash-lite"`; `FALLBACK_MODEL_NAMES = ("gemini-3.8-flash",)`; `GEMINI_MODEL` environment variable can override preferred model. Model availability depends on actual provider/account.
-- `MAX_MODEL_ATTEMPTS = 2`, `MAX_TOOL_ROUNDS = 3`, `MAX_TOOL_CALLS = 8`, `MAX_RESULTS_TO_MODEL = 5`, `MAX_PASSAGE_CHARS = 800`, `MAX_QUESTION_CHARS = 4000`.
+- Default `MODEL_NAME = "gemini-3.1-flash-lite"`; `GEMINI_MODEL` from the environment or `.env` overrides it. The Streamlit entry point copies configured app secrets into the environment before agent use. The agent calls only that configured model and does not silently substitute another model; actual model access depends on the provider account.
+- `MAX_TOOL_ROUNDS = 3`, `MAX_TOOL_CALLS = 8`, `MAX_RESULTS_TO_MODEL = 5`, `MAX_PASSAGE_CHARS = 800`, `MAX_QUESTION_CHARS = 4000`.
 - `THINKING_LEVEL = LOW`, `REQUEST_TIMEOUT_MS = 30000`, `RETRY_ATTEMPTS = 1` (SDK retry configuration; do not assume this guarantees a retry).
 - Tool definitions are `SEARCH_DOCUMENTS_DECLARATION` and `ANALYZE_EXCEL_DECLARATION`. `automatic_function_calling` is disabled, so Python explicitly executes returned function calls. Function-calling mode `AUTO` lets Gemini decide between tool call and text.
 - `SYSTEM_INSTRUCTION` requires evidence-based answers, source citations, no fabricated numbers, numeric aggregation (including average/mean) through `analyze_excel` rather than search hits, clarification when ambiguous, and pagination awareness.
-- `.env` or Streamlit app secrets supply `GEMINI_API_KEY`; `_safe_log_arguments()` and `_safe_tool_error()` redact potentially sensitive log details. Never paste actual secrets into this file or commits.
+- `.env` or environment variables supply `GEMINI_API_KEY` and optional `GEMINI_MODEL`; Streamlit app secrets are bridged in `app/main.py` so the agent remains independent of Streamlit. Logs record safe error categories and configuration presence, never API keys or document contents. `_safe_log_arguments()` and `_safe_tool_error()` redact potentially sensitive tool details.
 - The tool cache is reset at the start of each `DocumentAgent.ask()` invocation. Streamlit's `@st.cache_data` for document parsing is a **different cache**.
 
 ## Tool semantics (`app/tools.py`)
@@ -132,16 +132,14 @@ The following index includes **all defined functions and methods in the supplied
   - **`DocumentAgent._run_tool_call(self, call: object, structured_results: list[dict], question_context: str | None=None)`** — Run one model call and retain structured results for safe synthesis. (line 621)
 - **`ask_question(question: str, chunks: list[DocumentChunk] | None, client: object | None=None)`** — Convenience wrapper around DocumentAgent.ask. (line 677)
 - **`format_source(result: SearchResult)`** — Format one search hit as a citation string. (line 686)
-- **`_api_key_from_env()`** — Read GEMINI_API_KEY without logging or returning a missing value as secrets. (line 693)
+- **`_api_key_from_env()`** — Read GEMINI_API_KEY from the environment or `.env` without logging it. (line 693)
 - **`_shared_client(api_key: str)`** — Reuse one Gemini client so later questions skip extra connection setup. (line 699)
 - **`_http_options()`** — Cap request latency and avoid SDK-level retry storms. (line 710)
 - **`class ModelRequestError`** — A safe, classified API error without retaining provider request details. (line 721)
   - **`ModelRequestError.__init__(self, category: str, model: str)`** — Internal method; see implementation. (line 724)
 - **`_configured_model()`** — Internal helper; see implementation. (line 730)
-- **`_model_candidates()`** — Return a short list of models selected for Gemini tool-calling support. (line 735)
-- **`_generate_content(client: object, contents: list, allow_tools: bool, selected_model: str | None=None, attempted_models: set[str] | None=None)`** — Try at most two eligible models and return the model that succeeded. (line 742)
+- **`_generate_content(client: object, contents: list, allow_tools: bool, selected_model: str | None=None)`** — Call only the explicitly configured model and safely classify provider failures. (line 742)
 - **`_classify_api_error(error: Exception)`** — Classify expected provider failures without logging raw exception text. (line 803)
-- **`_can_fallback(category: str)`** — Internal helper; see implementation. (line 832)
 - **`_api_failure_message(category: str)`** — Internal helper; see implementation. (line 842)
 - **`_build_config(allow_tools: bool)`** — Use SDK function declarations but execute all tools in local Python. (line 855)
 - **`_append_model_turn(contents: list, response: object, calls: list | None=None)`** — Keep the model function-call turn in the conversation history. (line 887)

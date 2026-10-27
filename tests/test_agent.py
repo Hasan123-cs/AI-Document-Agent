@@ -14,6 +14,8 @@ from app.agent import (
     REQUEST_TIMEOUT_MS,
     SEARCH_DOCUMENTS_DECLARATION,
     SYSTEM_INSTRUCTION,
+    _api_key_from_env,
+    _configured_model,
     ask_question,
 )
 from app.tools import search_documents
@@ -624,17 +626,13 @@ def test_missing_api_key_does_not_call_gemini(monkeypatch) -> None:
     client_factory.assert_not_called()
 
 
-def test_gemini_key_can_be_read_from_streamlit_secrets(monkeypatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+def test_gemini_configuration_is_read_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "local-test-key")
+    monkeypatch.setenv("GEMINI_MODEL", "local-test-model")
     monkeypatch.setattr("app.agent.load_dotenv", lambda: None)
-    monkeypatch.setattr(
-        "app.agent.st",
-        SimpleNamespace(secrets={"GEMINI_API_KEY": "cloud-secret"}),
-    )
 
-    from app.agent import _api_key_from_env
-
-    assert _api_key_from_env() == "cloud-secret"
+    assert _api_key_from_env() == "local-test-key"
+    assert _configured_model() == "local-test-model"
 
 
 def test_gemini_api_failure_is_handled() -> None:
@@ -643,7 +641,7 @@ def test_gemini_api_failure_is_handled() -> None:
 
     answer = ask_question("What is the pump pressure?", [_pdf_chunk()], client=client)
 
-    assert answer.error == "api_failure"
+    assert answer.error == "unavailable"
     assert answer.is_fallback is True
     assert "Local Search Results — AI temporarily unavailable." in answer.text
     assert "150 PSI" in answer.text
@@ -655,7 +653,7 @@ def test_gemini_authentication_failure_is_actionable() -> None:
 
     answer = ask_question("What is the pump pressure?", [_pdf_chunk()], client=client)
 
-    assert answer.error == "api_failure"
+    assert answer.error == "authentication"
     assert "GEMINI_API_KEY" in answer.text
 
 
@@ -665,17 +663,14 @@ def test_gemini_invalid_request_failure_is_actionable() -> None:
 
     answer = ask_question("What is the pump pressure?", [_pdf_chunk()], client=client)
 
-    assert answer.error == "api_failure"
+    assert answer.error == "model_not_found"
     assert "configured Gemini model" in answer.text
 
 
-def test_gemini_falls_back_to_a_model_that_can_call_tools(monkeypatch) -> None:
+def test_gemini_does_not_silently_switch_models(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_MODEL", "missing-model")
     client = MagicMock()
-    client.models.generate_content.side_effect = [
-        RuntimeError("404 NOT_FOUND"),
-        _response(text="Hello!"),
-    ]
+    client.models.generate_content.side_effect = RuntimeError("404 NOT_FOUND")
 
     answer = ask_question("Hello", [_pdf_chunk()], client=client)
 
@@ -683,16 +678,15 @@ def test_gemini_falls_back_to_a_model_that_can_call_tools(monkeypatch) -> None:
         call.kwargs["model"]
         for call in client.models.generate_content.call_args_list
     ]
-    assert models == ["missing-model", MODEL_NAME]
-    assert answer.error is None
-    assert answer.model == MODEL_NAME
+    assert models == ["missing-model"]
+    assert answer.error == "model_not_found"
+    assert answer.model == "missing-model"
 
 
-def test_fallback_model_is_reused_for_follow_up_function_call(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_MODEL", "unavailable-model")
+def test_configured_model_is_reused_for_follow_up_function_call(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_MODEL", "configured-model")
     client = MagicMock()
     client.models.generate_content.side_effect = [
-        RuntimeError("503 UNAVAILABLE"),
         _response(function_calls=[_function_call("pump pressure")]),
         _response(text="The pump pressure is 150 PSI (guide.pdf, page 2)."),
     ]
@@ -703,7 +697,7 @@ def test_fallback_model_is_reused_for_follow_up_function_call(monkeypatch) -> No
         call.kwargs["model"]
         for call in client.models.generate_content.call_args_list
     ]
-    assert models == ["unavailable-model", MODEL_NAME, MODEL_NAME]
+    assert models == ["configured-model", "configured-model"]
     assert answer.error is None
     assert answer.sources[0].page_number == 2
 
@@ -718,7 +712,9 @@ def test_429_and_503_use_clear_local_fallbacks() -> None:
 
         answer = ask_question("What is the pump pressure?", [_pdf_chunk()], client=client)
 
-        assert answer.error == "api_failure"
+        assert answer.error == (
+            "rate_limited" if failure.startswith("429") else "unavailable"
+        )
         assert answer.is_fallback is True
         assert expected in answer.text
         assert "guide.pdf, page 2" in answer.source_labels()
@@ -731,7 +727,9 @@ def test_timeout_and_network_failures_use_local_fallback() -> None:
 
         answer = ask_question("What is the pump pressure?", [_pdf_chunk()], client=client)
 
-        assert answer.error == "api_failure"
+        assert answer.error == (
+            "timeout" if isinstance(failure, TimeoutError) else "network"
+        )
         assert answer.is_fallback is True
         assert "150 PSI" in answer.text
 

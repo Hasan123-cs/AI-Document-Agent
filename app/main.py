@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sys
 import time
 from pathlib import Path
 
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.agent import _api_key_from_env, ask_question
+from app.agent import _api_key_from_env, _configured_model, ask_question
 from app.document_loader import (
     MAX_UPLOAD_FILE_BYTES,
     MAX_UPLOAD_TOTAL_BYTES,
@@ -46,6 +48,7 @@ def should_skip_duplicate_request(clicked: bool, in_flight: bool) -> bool:
 
 def main() -> None:
     """Draw the page and handle one question at a time."""
+    _configure_gemini_from_streamlit_secrets()
     st.set_page_config(
         page_title="AI Document Assistant",
         page_icon="📘",
@@ -61,6 +64,33 @@ def main() -> None:
     _show_summary_cards(chunks)
     _show_question_form(chunks)
     _show_conversation(chunks)
+
+
+def _configure_gemini_from_streamlit_secrets() -> None:
+    """Bridge app-level Cloud secrets into env vars read by the Streamlit-free agent."""
+    try:
+        secrets = st.secrets
+    except StreamlitSecretNotFoundError:
+        secrets = {}
+
+    configured = []
+    for setting in ("GEMINI_API_KEY", "GEMINI_MODEL"):
+        try:
+            value = secrets.get(setting)
+        except (KeyError, StreamlitSecretNotFoundError):
+            value = None
+        if isinstance(value, str) and value.strip():
+            os.environ[setting] = value.strip()
+            configured.append(setting)
+
+    api_key_configured = bool(_api_key_from_env())
+    model_configured = bool(os.getenv("GEMINI_MODEL"))
+    logger.info(
+        "Gemini configuration source=%s api_key_configured=%s model_configured=%s",
+        "streamlit_secrets" if configured else "environment_or_dotenv",
+        api_key_configured,
+        model_configured,
+    )
 
 
 def _render_styles() -> None:
@@ -487,6 +517,7 @@ def _show_sidebar(chunks: list) -> None:
         st.caption(
             f"Gemini API · {'Configured' if api_configured else 'Not configured'}"
         )
+        st.caption(f"Configured model · {_configured_model()}")
         if st.session_state.get("answer") and st.session_state.answer.model:
             st.caption(f"Active model · {st.session_state.answer.model}")
 

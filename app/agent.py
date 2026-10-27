@@ -16,8 +16,6 @@ import time
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-import streamlit as st
-from streamlit.errors import StreamlitSecretNotFoundError
 
 from app.models import AgentAnswer, DocumentChunk
 from app.tools import (
@@ -30,8 +28,6 @@ from app.tools import (
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "gemini-3.1-flash-lite"
-FALLBACK_MODEL_NAMES = ("gemini-3.8-flash",)
-MAX_MODEL_ATTEMPTS = 2
 MAX_TOOL_ROUNDS = 3
 MAX_TOOL_CALLS = 8
 MAX_RESULTS_TO_MODEL = 5
@@ -196,20 +192,35 @@ class DocumentAgent:
             client = self._get_client()
         except Exception as exc:
             category = _classify_api_error(exc)
-            logger.warning("Gemini client initialization failed category=%s", category)
+            logger.warning(
+                "Gemini client initialization failed category=%s", category
+            )
+            if category in {
+                "authentication",
+                "model_not_found",
+                "invalid_request",
+            }:
+                return _timed_answer(
+                    AgentAnswer(
+                        text=_api_failure_message(category),
+                        error=category,
+                    ),
+                    started,
+                )
             return _timed_answer(
                 self._local_fallback(
                     cleaned,
                     _api_failure_message(category),
-                    error="api_failure",
+                    error=category,
                 ),
                 started,
             )
         if client is None:
+            logger.warning("Gemini configuration missing setting=GEMINI_API_KEY")
             return _timed_answer(
                 self._local_fallback(
                     cleaned,
-                    "GEMINI_API_KEY is not set. Add it to your environment or .env file.",
+                    "GEMINI_API_KEY is not set. Add it to your environment, .env file, or Streamlit app secrets.",
                     error="missing_api_key",
                 ),
                 started,
@@ -226,7 +237,6 @@ class DocumentAgent:
         gemini_calls = 0
         tool_executions = 0
         selected_model: str | None = None
-        attempted_models: set[str] = set()
 
         tool_history: set[str] = set()
         # assign via gemini agent 
@@ -243,7 +253,6 @@ class DocumentAgent:
                     contents,
                     allow_tools=allow_tools,
                     selected_model=selected_model,
-                    attempted_models=attempted_models,
                 )
                 gemini_calls += 1
                 calls = _response_function_calls(response)
@@ -286,11 +295,26 @@ class DocumentAgent:
                         ),
                         started,
                     )
+                if exc.category in {
+                    "authentication",
+                    "model_not_found",
+                    "invalid_request",
+                }:
+                    return _timed_answer(
+                        AgentAnswer(
+                            text=_api_failure_message(exc.category),
+                            error=exc.category,
+                            sources=_unique_sources(sources),
+                            reference_labels=list(dict.fromkeys(reference_labels)),
+                            model=exc.model,
+                        ),
+                        started,
+                    )
                 return _timed_answer(
                     self._local_fallback(
                         cleaned,
                         _api_failure_message(exc.category),
-                        error="api_failure",
+                        error=exc.category,
                         sources=sources,
                         reference_labels=reference_labels,
                     ),
@@ -704,15 +728,9 @@ def format_source(result: SearchResult) -> str:
 
 
 def _api_key_from_env() -> str:
-    """Read the key from the environment or Streamlit's app secrets."""
+    """Read GEMINI_API_KEY from the environment or local .env file."""
     load_dotenv()
-    environment_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    if environment_key:
-        return environment_key
-    try:
-        return str(st.secrets["GEMINI_API_KEY"]).strip()
-    except (KeyError, StreamlitSecretNotFoundError):
-        return ""
+    return (os.getenv("GEMINI_API_KEY") or "").strip()
 
 
 def _shared_client(api_key: str) -> object:
@@ -751,72 +769,38 @@ def _configured_model() -> str:
     return (os.getenv("GEMINI_MODEL") or MODEL_NAME).strip() or MODEL_NAME
 
 
-def _model_candidates() -> list[str]:
-    """Return a short list of models selected for Gemini tool-calling support."""
-    return list(
-        dict.fromkeys([_configured_model(), MODEL_NAME, *FALLBACK_MODEL_NAMES])
-    )
-
-
 def _generate_content(
     client: object,
     contents: list,
     allow_tools: bool,
     selected_model: str | None = None,
-    attempted_models: set[str] | None = None,
 ) -> tuple[object, str]:
-    # if response is succes return the response and model name if not try another model
-    """Try at most two eligible models and return the model that succeeded."""
-    # use the attempted_models set to avoid retrying the same model in a loop
-    attempted = attempted_models if attempted_models is not None else set()
-    # get all model distinct in a list [model-A , model-B]
-    candidates = _model_candidates()
-    if selected_model:
-        # if the selected model success in last time resort the list too start with select model
-        candidates = [selected_model] + [
-            candidate for candidate in candidates if candidate != selected_model
-        ]
-        # delete the attempt model from the list of candidates to avoid retrying it
-    candidates = [model for model in candidates if model not in attempted]
-    # how model can try for example each call for method try 2 models
-    candidates = candidates[:MAX_MODEL_ATTEMPTS]
-    last_error: ModelRequestError | None = None
-
-    for model in candidates:
-        started = time.perf_counter()
-        response = None
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=_build_config(allow_tools=allow_tools),
-            )
-            logger.info(
-                "timing.gemini_request model=%s allow_tools=%s seconds=%.2f",
-                model,
-                allow_tools,
-                time.perf_counter() - started,
-            )
-            return response, model
-        except Exception as exc:
-            attempted.add(model)
-            category = _classify_api_error(exc)
-            logger.warning(
-                "Gemini request failed model=%s category=%s seconds=%.2f",
-                model,
-                category,
-                time.perf_counter() - started,
-            )
-            last_error = ModelRequestError(category, model)
-            # can fallback if the error is not authentication
-            #  or invalid request because these errors are not temporary and will not be solved 
-            # by retrying another model
-            if not _can_fallback(category):
-                raise last_error from None
-
-    if last_error is not None:
-        raise last_error
-    raise ModelRequestError("unavailable", selected_model or MODEL_NAME)
+    """Call the explicitly configured model and classify any provider error."""
+    model = selected_model or _configured_model()
+    started = time.perf_counter()
+    logger.info("Gemini request started model=%s allow_tools=%s", model, allow_tools)
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=_build_config(allow_tools=allow_tools),
+        )
+    except Exception as exc:
+        category = _classify_api_error(exc)
+        logger.warning(
+            "Gemini request failed model=%s category=%s seconds=%.2f",
+            model,
+            category,
+            time.perf_counter() - started,
+        )
+        raise ModelRequestError(category, model) from None
+    logger.info(
+        "timing.gemini_request model=%s allow_tools=%s seconds=%.2f",
+        model,
+        allow_tools,
+        time.perf_counter() - started,
+    )
+    return response, model
 
 
 def _classify_api_error(error: Exception) -> str:
@@ -829,7 +813,7 @@ def _classify_api_error(error: Exception) -> str:
     if "429" in status_text or "429" in details or "RESOURCE_EXHAUSTED" in details:
         return "rate_limited"
     if "404" in status_text or "404" in details or "NOT_FOUND" in details:
-        return "not_found"
+        return "model_not_found"
     if "503" in status_text or "503" in details or "UNAVAILABLE" in details:
         return "unavailable"
     if any(
@@ -848,20 +832,13 @@ def _classify_api_error(error: Exception) -> str:
     return "unknown"
 
 
-def _can_fallback(category: str) -> bool:
-    return category in {
-        "not_found",
-        "rate_limited",
-        "unavailable",
-        "timeout",
-        "network",
-    }
-
-
 def _api_failure_message(category: str) -> str:
     messages = {
-        "not_found": "The configured Gemini model was not found for this API key.",
-        "rate_limited": "Gemini API quota or rate limit was reached for the available models.",
+        "model_not_found": (
+            "The configured Gemini model was not found or is not accessible "
+            "to this API key. Check GEMINI_MODEL and model access."
+        ),
+        "rate_limited": "Gemini API quota or rate limit was reached for the configured model.",
         "unavailable": "Gemini is temporarily unavailable or at high demand.",
         "timeout": "The Gemini request timed out.",
         "network": "A network error prevented the Gemini request.",

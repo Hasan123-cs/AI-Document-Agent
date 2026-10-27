@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from app.main import should_skip_duplicate_request
 from app import main as main_module
+from app.agent import _configured_model
 from app.models import AgentAnswer, DocumentChunk
 
 
@@ -31,6 +32,26 @@ def test_fresh_click_is_not_skipped() -> None:
 def test_idle_rerun_is_not_treated_as_a_request() -> None:
     assert should_skip_duplicate_request(clicked=False, in_flight=False) is False
     assert should_skip_duplicate_request(clicked=False, in_flight=True) is False
+
+
+def test_streamlit_secrets_configure_key_and_model_without_logging_values(
+    monkeypatch,
+    caplog,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "old-env-key")
+    monkeypatch.setenv("GEMINI_MODEL", "old-env-model")
+    cloud_key = "cloud-test-key-not-for-logs"
+    cloud_model = "cloud-test-model"
+    fake_streamlit = SimpleNamespace(
+        secrets={"GEMINI_API_KEY": cloud_key, "GEMINI_MODEL": cloud_model}
+    )
+
+    with patch.object(main_module, "st", fake_streamlit):
+        main_module._configure_gemini_from_streamlit_secrets()
+
+    assert main_module._api_key_from_env() == cloud_key
+    assert _configured_model() == cloud_model
+    assert cloud_key not in caplog.text
 
 
 def test_conversation_passes_loaded_chunks_to_excel_renderer() -> None:
