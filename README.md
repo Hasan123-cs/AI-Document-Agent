@@ -1,31 +1,39 @@
 # AI Document Assistant
 
-An AI-powered document analysis application built with **Python, Streamlit, and Google Gemini**. The application reads PDF and Excel files from a local folder and answers natural-language questions about their contents using LLM function calling and dedicated document analysis tools.
-
-Developed as a technical assessment for the **Junior Software & IT Support** role.
+An AI-powered document analysis application built with **Python, Streamlit, and Google Gemini**. The application enables users to upload PDF and Excel documents, ask questions in natural language, and receive AI-generated answers supported by document references and structured data analysis.
 
 ## Features
 
-- **PDF and Excel Processing:** Reads PDF, XLSX, and XLS documents from the local folder or native Streamlit multi-file upload.
-- **Session-Isolated Uploads:** Uploaded documents are processed in memory, available only to the current Streamlit session, and removed when cleared or the session ends.
-- **Natural-Language Question Answering:** Users can ask questions through a simple Streamlit web interface.
-- **Responsive Analysis Dashboard:** A professional, mobile-aware workspace for document status, chat, source citations, and structured spreadsheet results.
-- **AI Function Calling:** Google Gemini selects appropriate tools to search documents or analyze Excel data.
-- **Excel Data Analysis:** Supports filtering, threshold comparisons, sums, averages, counts, and extrema on structured spreadsheet data.
-- **Source References:** Displays references to the documents used to answer questions.
-- **Error Handling:** Handles empty folders, unreadable files, and common API errors.
+- **PDF and Excel Processing:** Supports PDF, XLSX, and XLS documents from a local folder or through a Streamlit multi-file uploader.
+- **Drag-and-Drop File Upload:** Users can upload multiple documents directly through the dashboard without manually adding files to the project.
+- **Session-Isolated Uploads:** Each visitor's uploaded documents are processed in memory and remain accessible only within their own Streamlit session.
+- **Document Management:** View uploaded files, remove individual documents, or clear uploaded documents.
+- **Natural-Language Question Answering:** Ask questions about document content using Google Gemini.
+- **Gemini Function Calling:** Automatically selects tools for document searching and structured Excel analysis.
+- **Excel Data Analysis:** Supports `filter`, `sum`, `average`, `count`, `min`, `max`, and `list_columns`, including supported numeric threshold comparisons.
+- **Deterministic Calculations:** Uses Python-based calculations for structured Excel data instead of relying solely on AI-generated arithmetic.
+- **Source References:** Displays PDF page references and Excel sheet/row references where available.
+- **Modern Streamlit Dashboard:** Responsive interface with document statistics, interactive chat, example questions, and structured spreadsheet results.
 - **Local Search Fallback:** Returns relevant document search results when Gemini is temporarily unavailable.
-- **Document Caching:** Reduces repeated PDF and Excel processing.
+- **Document Caching:** Reduces unnecessary document reprocessing.
+- **Error Handling:** Handles invalid documents, empty collections, upload limits, and common API errors.
+- **Automated Testing:** Uses pytest to validate document processing, tool execution, and agent behavior.
 
 ## Technology Stack
 
 | Technology | Purpose |
 |---|---|
-| Python | Backend logic and document processing |
-| Streamlit | Web user interface |
+| Python | Application logic and document processing |
+| Streamlit | Interactive web dashboard and file uploads |
 | Google Gemini API | Natural-language processing and function calling |
-| PDF and Excel parsing libraries | Reading and extracting document content |
-| Pytest | Automated testing |
+| PyMuPDF | PDF text extraction |
+| pandas | Structured Excel data processing |
+| openpyxl | Excel workbook processing |
+| Decimal | Precise numeric calculations |
+| python-dotenv | Local environment configuration |
+| pytest | Automated testing |
+| Git & GitHub | Version control and repository hosting |
+| Streamlit Community Cloud | Web deployment |
 | Cursor | AI-assisted development |
 
 ## Project Structure
@@ -48,25 +56,25 @@ AI-Document-Agent/
 
 ### Main Components
 
-- **`app/main.py`** — Streamlit interface, document status, question submission, answer display, and caching.
-- **`app/agent.py`** — Gemini integration, function calling, tool orchestration, and fallback handling.
-- **`app/tools.py`** — Local document searching and structured Excel analysis.
+- **`app/main.py`** — Streamlit dashboard, file uploads, session state, document management, chat, and result presentation.
+- **`app/agent.py`** — Google Gemini integration, function calling, tool orchestration, and fallback handling.
+- **`app/tools.py`** — Document searching and structured Excel operations.
 - **`app/document_loader.py`** — PDF and Excel extraction, chunk creation, and source metadata.
 - **`app/models.py`** — Shared data models, including `DocumentChunk` and `AgentAnswer`.
-- **`tests/`** — Automated tests for application functionality.
+- **`tests/`** — Automated tests for document processing and agent functionality.
 
 ## Installation and Setup
 
 ### Prerequisites
 
-- Python 3.10 or newer (verify compatibility with the installed dependencies)
-- A Google Gemini API key
-- Git (for cloning the repository)
+- Python 3.10 or newer, subject to installed dependency compatibility
+- Google Gemini API key
+- Git
 
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/Hasan123-cs/AI-Document-Agent
+git clone https://github.com/Hasan123-cs/AI-Document-Agent.git
 cd AI-Document-Agent
 ```
 
@@ -76,13 +84,13 @@ cd AI-Document-Agent
 python -m venv .venv
 ```
 
-Activate it on Windows:
+Activate on Windows:
 
 ```powershell
 .venv\Scripts\Activate.ps1
 ```
 
-On macOS or Linux:
+Activate on macOS/Linux:
 
 ```bash
 source .venv/bin/activate
@@ -94,27 +102,33 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Configure the API Key
+### 4. Configure Gemini API Key
 
 Create a `.env` file in the project root:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-3.1-flash-lite
 ```
 
-`GEMINI_MODEL` is optional; the default is `gemini-3.1-flash-lite`. The agent
-uses the configured model as-is and does not silently switch to another model.
 Never commit your actual API key to GitHub.
 
 ### 5. Add Documents
 
-Place your PDF and Excel files inside the `documents/` directory.
-You can also upload multiple PDF, XLSX, or XLS files from the dashboard. Uploads are
-limited to 10 MB per file and 30 MB total per session, processed in memory, and not
-written to the documents folder.
+You can use either method:
 
-Example:
+**Option A — Upload documents through Streamlit**
+
+Upload PDF, XLSX, or XLS files directly from the dashboard.
+
+- Multiple files supported.
+- Maximum 10 MB per file.
+- Maximum 30 MB total uploaded data per session.
+- Uploaded files are processed in memory.
+- Uploaded files are not written to the local `documents/` folder.
+
+**Option B — Use the local documents folder**
+
+Place your files inside `documents/`:
 
 ```text
 documents/
@@ -123,95 +137,190 @@ documents/
 └── boq.xlsx
 ```
 
-### 6. Run the Application
+Both local and uploaded documents can be used by the document analysis agent.
 
-From the project root, execute:
+### 6. Run the Application
 
 ```bash
 python -m streamlit run app/main.py
 ```
 
-Streamlit will display a local URL where you can access the application.
+Open the local URL displayed in your terminal, typically:
+
+`http://localhost:8501`
 
 ## How It Works
 
-1. The application reads PDF and Excel files from the documents folder.
-2. The user may additionally upload PDF and Excel documents; each upload is validated and converted to source-aware chunks in the current Streamlit session.
-3. Extracted local and uploaded content is combined into searchable document chunks with source metadata.
-4. The user submits a natural-language question through the Streamlit interface.
-5. The Gemini agent uses function calling to select an appropriate document analysis tool.
-6. The selected tool searches document content or performs structured Excel analysis.
-7. The agent returns an answer with available source references.
-8. If Gemini is unavailable, the application can return local search results as a fallback.
+1. **Document Input:** The application loads PDF and Excel files from the local folder or through the Streamlit uploader.
+2. **Document Validation:** Uploaded files are checked for supported formats and size limits.
+3. **Document Extraction:** PDF text and Excel spreadsheet content are extracted.
+4. **Chunk Creation:** Extracted information is converted into searchable document chunks with source metadata.
+5. **Session Management:** Uploaded document chunks are associated with the current Streamlit session.
+6. **User Question:** The user asks a question through the chat interface.
+7. **Gemini Function Calling:** Gemini selects an appropriate tool based on the question.
+8. **Tool Execution:** Python executes document searches or Excel analysis operations.
+9. **Answer Generation:** Gemini uses the tool results to generate a response.
+10. **Source References:** The application displays available document references.
+11. **Fallback Handling:** When appropriate, verified Excel calculations or local document search results can be returned if Gemini is unavailable.
 
-### Streamlit Community Cloud
+## Excel Analysis Operations
 
-Deploy the repository using `app/main.py` as the app entry point, and configure
-`GEMINI_API_KEY` and (optionally) `GEMINI_MODEL` in the app's Streamlit secrets.
-For example:
+The application supports the following structured Excel operations:
 
-```toml
-GEMINI_API_KEY = "your_gemini_api_key"
-GEMINI_MODEL = "gemini-3.1-flash-lite"
+| Operation | Description | Example Question |
+|---|---|---|
+| `list_columns` | Display available spreadsheet columns | What columns are available? |
+| `filter` | Find rows matching supported conditions | Show items costing more than 1,000 |
+| `sum` | Calculate the total of numeric values | What is the total cost? |
+| `average` | Calculate the arithmetic mean | What is the average cost? |
+| `count` | Count matching records | How many items are listed? |
+| `min` | Find the minimum numeric value | What is the lowest cost? |
+| `max` | Find the maximum numeric value | What is the highest cost? |
+
+Excel calculations use Python-based structured data processing to improve numerical reliability.
+
+## File Upload and Session Isolation
+
+The application supports document uploads through Streamlit's native file uploader.
+
+### Upload Features
+
+- Upload multiple PDF and Excel documents.
+- Display uploaded document information.
+- Remove individual uploaded documents.
+- Clear uploaded documents.
+- Update the active document collection.
+- Ask questions about uploaded documents.
+- Display available source references.
+
+### Session Isolation
+
+Each Streamlit visitor has an independent session.
+
+Uploaded document content is processed in memory and scoped to that session, helping prevent one visitor from accessing another visitor's uploaded documents.
+
+Uploaded files are not permanently stored in the project folder.
+
+**Note:** Files committed to the `documents/` folder are shared application resources and may be accessible to all visitors. Do not deploy private documents in this folder.
+
+## Streamlit Community Cloud Deployment
+
+The application is designed for deployment on Streamlit Community Cloud.
+
+### Deployment Steps
+
+1. Push the project to GitHub.
+2. Visit https://share.streamlit.io.
+3. Sign in with GitHub.
+4. Select the repository containing the application.
+5. Select the correct branch, usually `main`.
+6. Set the main file path to:
+
+```text
+app/main.py
 ```
 
-The Streamlit entry point reads these settings and makes them available to the
-agent without coupling the agent module to Streamlit. The model name is used
-exactly as configured; authentication, model-access, quota, network, and
-availability failures are diagnosed separately. Temporary Gemini service
-failures retain the local-search fallback. The uploader uses session state rather than
-shared or permanent upload storage, so each visitor's uploaded chunks are scoped
-to that visitor's Streamlit session. Local files in `documents/` remain available
-to every visitor; do not put private documents in that folder on a public deploy.
+7. Open Advanced settings and configure the Gemini API key in Streamlit Secrets:
+
+```toml
+GEMINI_API_KEY = "your_actual_api_key"
+```
+
+8. Deploy the application.
+9. Test document uploads, Gemini responses, and Excel calculations.
+
+### Public Deployment Considerations
+
+- Keep the Gemini API key private.
+- Do not commit sensitive documents.
+- Uploaded documents are session-scoped.
+- Gemini API usage is subject to provider limits.
+- Public users should avoid uploading confidential or sensitive information.
+- Large document collections may require additional resource optimization.
 
 ## Example Questions
 
-The following questions illustrate the intended capabilities. Results depend on the documents provided.
+### PDF Analysis
 
-**PDF Questions**
-- Summarize the scope of work described in the contract.
+- Summarize the uploaded PDF document.
 - What are the main project requirements?
-- What deliverables are mentioned in the documents?
+- What is the scope of work?
+- Which page mentions payment conditions?
+- What deliverables are described in the document?
 
-**Excel Questions**
-- List all cost items above SAR 1 million.
-- Which items have the highest costs?
-- What is the total cost of the listed items?
-- What is the average cost?
+### Excel Analysis
+
+- What is the total cost of all items?
+- Calculate the average cost.
+- Which item has the highest cost?
+- Show all items costing more than SAR 1,000,000.
+- How many records match the selected condition?
+- List the available Excel columns.
+
+Results depend on the documents provided.
 
 ## Testing
 
-Run the automated tests from the project root:
+The application includes automated tests using pytest.
+
+Run the full test suite:
+
+```bash
+python -m pytest -v
+```
+
+Or:
 
 ```bash
 python -m pytest tests
 ```
 
-The test suite is intended to validate document processing, tool behavior, and error handling.
+The test suite covers document processing, Excel analysis, agent behavior, source references, and error handling.
 
 ## Error Handling and Limitations
 
-The application includes handling for common failures, including unreadable documents, empty folders, and temporary AI service issues.
+The application handles common errors, including:
 
-Current limitations include:
+- Unsupported file formats
+- Corrupted or unreadable documents
+- Empty document collections
+- Invalid Excel columns
+- Ambiguous spreadsheet column names
+- Invalid numeric inputs
+- Upload size limits
+- Gemini API failures
+- Tool execution limits
+
+### Current Limitations
 
 - Scanned PDFs without extractable text may require OCR.
 - Complex PDF tables may not be extracted perfectly.
-- Accuracy depends on the quality and structure of the provided documents.
-- Very large document collections may require additional processing optimizations.
-- AI-generated answers depend on the availability of the configured Gemini API.
-
+- Accuracy depends on document structure and extraction quality.
+- Very large document collections may require further optimization.
+- AI-generated responses depend on Gemini API availability.
+- Public hosting resources and API usage limits may affect performance.
 
 ## AI-Assisted Development
 
-This project was developed with assistance from **Cursor**, which was used for implementation, debugging, and code refactoring.
+This project was developed with assistance from **Cursor**, used for implementation, debugging, testing, and code refactoring.
 
-For development time, key design decisions, and potential improvements, see [`DEVELOPMENT_NOTE.md`](DEVELOPMENT_NOTE.md).
+The project demonstrates practical use of AI-assisted development alongside Python programming, document processing, LLM integration, and automated testing.
+
+For development time, technical decisions, and future improvements, see [DEVELOPMENT_NOTE.md](DEVELOPMENT_NOTE.md).
 
 ## Project Purpose
 
-This application demonstrates AI-assisted software development, LLM tool calling, document processing, structured data analysis, and a practical user interface for interacting with project documents.
+The AI Document Assistant demonstrates:
 
+- Python application development
+- AI integration using Google Gemini
+- LLM Function Calling
+- PDF and Excel processing
+- Structured numerical analysis
+- Session-based document management
+- Streamlit dashboard development
+- Error handling and fallback mechanisms
+- Automated testing
+- Cloud deployment
 
-
-
+The goal is to provide an accessible document analysis application that allows users to interact with PDF and Excel content through natural-language questions.
